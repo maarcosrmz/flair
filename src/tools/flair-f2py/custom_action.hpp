@@ -1,3 +1,4 @@
+#pragma once
 #include "flang/Frontend/FrontendActions.h"
 #include "wdata.hpp"
 
