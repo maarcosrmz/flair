@@ -102,8 +102,10 @@ void traverse_module(semantics::Symbol const &mod_sym, module_info_t &mi) {
     return not n.empty() and std::isalpha(static_cast<unsigned char>(n[0])) != 0;
   };
 
-  // Filtered range of module symbols
-  auto const filtered_symbols = llvm::make_filter_range(mod_scope->GetSymbols(), is_not_compiler_generated);
+  // Lifetime of module_symbols is not kept by make_filter_range. We therefore
+  // a local reference that outlives the call, to avoid lifetime issues.
+  auto const module_symbols   = mod_scope->GetSymbols();
+  auto const filtered_symbols = llvm::make_filter_range(module_symbols, is_not_compiler_generated);
 
   llvm::for_each(filtered_symbols, match_dtype);
   llvm::for_each(filtered_symbols, match_ctor_or_initializer);
