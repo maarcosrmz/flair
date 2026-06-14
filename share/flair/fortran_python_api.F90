@@ -37,6 +37,11 @@ module python_api_mod
 
     ! ===== NumPy constants (x86-64 Linux / CPython 3.14) =====
 
+    ! Supported ABI and API versions
+    integer(c_int), parameter :: NPY_VERSION         = int(Z'02000000', c_int) ! NPY_API_VERSION 2
+    integer(c_int), parameter :: NPY_FEATURE_VERSION = int(Z'00000010', c_int) ! NPY_1_23_API_VERSION (see default NPY_FEATURE_VERSION in numpyconfig.h)
+    character(kind=c_char, len=*), parameter :: NPY_FEATURE_VERSION_STRING = "1.23"
+
     ! Type codes
     integer(c_int), parameter :: NPY_INT64 = 7  ! NPY_LONG on 64-bit Linux
 
@@ -127,16 +132,6 @@ module python_api_mod
     type(c_ptr), bind(C, name="PyExc_IndexError")     :: PyExc_IndexError
     type(c_ptr), bind(C, name="PyExc_RuntimeError")   :: PyExc_RuntimeError
     type(c_ptr), bind(C, name="PyExc_ImportError")    :: PyExc_ImportError
-
-    ! ===== NumPy API runtime state =====
-    ! Populated once by numpy_api_init(); shared across all modules that use python_api_mod.
-    ! API table indices: C 0-based → Fortran 1-based (= C + 1).
-    type(c_ptr),    save :: numpy_api_ptr            = c_null_ptr
-    type(c_ptr),    save :: PyArray_Type_ptr         = c_null_ptr
-    type(c_funptr), save :: fp_PyArray_NewFromDescr  = c_null_funptr
-    type(c_funptr), save :: fp_PyArray_DescrFromType = c_null_funptr
-    type(c_funptr), save :: fp_PyArray_SetBaseObject = c_null_funptr
-    type(c_funptr), save :: fp_PyArray_FromAny       = c_null_funptr
 
     ! Null-terminated strings used by import_array (target+save so c_loc stays valid)
     character(kind=c_char, len=31), target, save :: s_numpy_core   = &
@@ -368,6 +363,12 @@ module python_api_mod
 
     ! ===== Abstract interfaces for NumPy function pointers =====
     abstract interface
+        ! PyArray_GetNDArrayCVersion: Get runtime C API version
+        function PyArray_GetNDArrayCVersion_iface() bind(C) result(r)
+            import :: c_int
+            integer(c_int) :: r
+        end function
+
         ! PyArray_NewFromDescr: steals a reference to descr
         function PyArray_NewFromDescr_iface(subtype, descr, nd, dims, strides, data, &
                                             flags, obj) bind(C) result(r)
@@ -401,6 +402,18 @@ module python_api_mod
         end function
     end interface
 
+    ! ===== NumPy API runtime state =====
+    ! Populated once by numpy_api_init(); shared across all modules that use python_api_mod.
+    ! API table indices: C 0-based → Fortran 1-based (= C + 1).
+    type(c_ptr),    save :: numpy_api_ptr            = c_null_ptr
+    type(c_ptr),    save :: PyArray_Type_ptr         = c_null_ptr
+    procedure(PyArray_GetNDArrayCVersion_iface),  pointer :: PyArray_GetNDArrayCVersion
+    procedure(PyArray_GetNDArrayCVersion_iface),  pointer :: PyArray_GetNDArrayCFeatureVersion
+    procedure(PyArray_NewFromDescr_iface),        pointer :: PyArray_NewFromDescr
+    procedure(PyArray_DescrFromType_iface),       pointer :: PyArray_DescrFromType
+    procedure(PyArray_SetBaseObject_iface),       pointer :: PyArray_SetBaseObject
+    procedure(PyArray_FromAny_iface),             pointer :: PyArray_FromAny
+
 contains
 
     ! Fortran equivalent of the NumPy import_array() macro.
@@ -410,6 +423,15 @@ contains
         integer(c_int) :: r
         type(c_ptr) :: numpy_mod, c_api_obj
         type(c_ptr), pointer :: api(:)
+        integer(c_int) :: PyArray_ABI_VERSION, PyArray_RUNTIME_VERSION
+        integer :: n
+        type(c_funptr), save :: fp_PyArray_GetNDArrayCVersion        = c_null_funptr
+        type(c_funptr), save :: fp_PyArray_GetNDArrayCFeatureVersion = c_null_funptr
+        type(c_funptr), save :: fp_PyArray_NewFromDescr       = c_null_funptr
+        type(c_funptr), save :: fp_PyArray_DescrFromType      = c_null_funptr
+        type(c_funptr), save :: fp_PyArray_SetBaseObject      = c_null_funptr
+        type(c_funptr), save :: fp_PyArray_FromAny            = c_null_funptr
+        character(kind=c_char, len=512), save, target :: err_msg
 
         r = -1_c_int
 
@@ -442,11 +464,50 @@ contains
 
         ! Expose void** as an array of c_ptr; indices below are C 0-based + 1
         call c_f_pointer(numpy_api_ptr, api, [400_c_ptrdiff_t])
-        PyArray_Type_ptr         = api(3)                              ! C index 2
-        fp_PyArray_DescrFromType = transfer(api(46),  c_null_funptr)  ! C index 45
-        fp_PyArray_FromAny       = transfer(api(70),  c_null_funptr)  ! C index 69
-        fp_PyArray_NewFromDescr  = transfer(api(95),  c_null_funptr)  ! C index 94
-        fp_PyArray_SetBaseObject = transfer(api(283), c_null_funptr)  ! C index 282
+        PyArray_Type_ptr         = api(3)                                         ! C index 2
+        fp_PyArray_GetNDArrayCVersion        = transfer(api(1),   c_null_funptr); ! C index 0
+        fp_PyArray_DescrFromType             = transfer(api(46),  c_null_funptr)  ! C index 45
+        fp_PyArray_FromAny                   = transfer(api(70),  c_null_funptr)  ! C index 69
+        fp_PyArray_NewFromDescr              = transfer(api(95),  c_null_funptr)  ! C index 94
+        fp_PyArray_GetNDArrayCFeatureVersion = transfer(api(212), c_null_funptr); ! C index 211
+        fp_PyArray_SetBaseObject             = transfer(api(283), c_null_funptr)  ! C index 282
+
+        call c_f_procpointer(fp_PyArray_GetNDArrayCVersion, PyArray_GetNDArrayCVersion)
+        call c_f_procpointer(fp_PyArray_DescrFromType,      PyArray_DescrFromType)
+        call c_f_procpointer(fp_PyArray_FromAny,            PyArray_FromAny)
+        call c_f_procpointer(fp_PyArray_NewFromDescr,       PyArray_NewFromDescr)
+        call c_f_procpointer(fp_PyArray_GetNDArrayCFeatureVersion, PyArray_GetNDArrayCFeatureVersion)
+        call c_f_procpointer(fp_PyArray_SetBaseObject,      PyArray_SetBaseObject)
+
+        ! Perform runtime check of C API version.  As of now NumPy 2.0 is ABI
+        ! backwards compatible (in the exposed feature subset!) for all practical
+        ! purposes.
+        PyArray_ABI_VERSION = PyArray_GetNDArrayCVersion()
+        if (NPY_VERSION < PyArray_ABI_VERSION) then
+            write(err_msg, '(a,z8.8,a,z8.8)') &
+                'module compiled against ABI version 0x', NPY_VERSION, &
+                ' but this version of numpy is 0x', PyArray_ABI_VERSION
+            n = len_trim(err_msg)
+            err_msg(n+1:n+1) = c_null_char
+            call PyErr_SetString(PyExc_RuntimeError, c_loc(err_msg))
+            return
+        end if
+
+        PyArray_RUNTIME_VERSION = PyArray_GetNDArrayCFeatureVersion()
+        if (NPY_FEATURE_VERSION > PyArray_RUNTIME_VERSION) then
+            write(err_msg, '(a,z8.8,a,a,a,z8.8,a)') &
+                'module was compiled against NumPy C-API version 0x', NPY_FEATURE_VERSION, &
+                ' (NumPy ', NPY_FEATURE_VERSION_STRING, &
+                ') but the running NumPy has C-API version 0x', PyArray_RUNTIME_VERSION, &
+                '. Check the section C-API incompatibility at the Troubleshooting ImportError ' // &
+                'section at https://numpy.org/devdocs/user/troubleshooting-importerror.html' // &
+                '#c-api-incompatibility for indications on how to solve this problem.'
+            n = len_trim(err_msg)
+            err_msg(n+1:n+1) = c_null_char
+            call PyErr_SetString(PyExc_RuntimeError, c_loc(err_msg))
+            return
+        end if
+
         r = 0_c_int
     end function
 
