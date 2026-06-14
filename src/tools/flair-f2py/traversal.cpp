@@ -25,8 +25,10 @@ void traverse_module(semantics::Symbol const &mod_sym, module_info_t &mi) {
   };
 
   auto const match_proc_binding= [&](semantics::Symbol const &sym) {
-    if (default_private and not sym.attrs().test(semantics::Attr::PUBLIC)) return;
     if (not sym.has<semantics::ProcBindingDetails>()) return;
+    // Type-bound procedure accessibility comes from the type's CONTAINS section,
+    // which is public unless marked PRIVATE
+    if (sym.attrs().test(semantics::Attr::PRIVATE)) return;
     fnt_info_t fi{&sym, false, current_dtype ? current_dtype->ptr : nullptr};
     if (current_dtype) current_dtype->methods.emplace_back(fi);
     else               mi.functions.emplace_back(fi);
@@ -46,7 +48,8 @@ void traverse_module(semantics::Symbol const &mod_sym, module_info_t &mi) {
     }
 
     if (not sym.has<semantics::SubprogramDetails>()) return;
-    std::vector<semantics::Symbol *> const &args = sym.get<semantics::SubprogramDetails>().dummyArgs();
+    auto const &subp = sym.get<semantics::SubprogramDetails>();
+    std::vector<semantics::Symbol *> const &args = subp.dummyArgs();
 
     if (args.empty() || args.front() == nullptr) return;
 
@@ -56,10 +59,13 @@ void traverse_module(semantics::Symbol const &mod_sym, module_info_t &mi) {
     semantics::DerivedTypeSpec const *dts = type->AsDerived();
     if (dts == nullptr) return;
 
-    // FIXME: we possibly only want to match symbols that contain _init as a suffix
+    std::string const nm = sym.name().ToString();
+    bool const is_init = not subp.isFunction() and nm.size() >= 5 and
+                         nm.compare(nm.size() - 5, 5, "_init") == 0;
+    if (not is_init) return;
+
     if (auto const &it = mi.derived_types.find(dts->name().ToString());
-          it != mi.derived_types.end() and
-          sym.name().ToString().find("_init") == std::string::npos) {
+          it != mi.derived_types.end()) {
       // We have found the subroutine in charge of initializing the derived_type
       it->second.init = fnt_info_t{&sym, false, nullptr};
     }
@@ -90,9 +96,18 @@ void traverse_module(semantics::Symbol const &mod_sym, module_info_t &mi) {
     current_dtype = nullptr;
   };
 
-  llvm::for_each(mod_scope->GetSymbols(), match_dtype);
-  llvm::for_each(mod_scope->GetSymbols(), match_ctor_or_initializer);
-  llvm::for_each(mod_scope->GetSymbols(), match_subprogram);
-  llvm::for_each(mod_scope->GetSymbols(), match_proc_binding);
+  // Predicate to filter out compiler-generated entities
+  auto const is_not_compiler_generated = [](semantics::Symbol const&s) {
+    std::string const n = s.name().ToString();
+    return not n.empty() and std::isalpha(static_cast<unsigned char>(n[0])) != 0;
+  };
+
+  // Filtered range of module symbols
+  auto const filtered_symbols = llvm::make_filter_range(mod_scope->GetSymbols(), is_not_compiler_generated);
+
+  llvm::for_each(filtered_symbols, match_dtype);
+  llvm::for_each(filtered_symbols, match_ctor_or_initializer);
+  llvm::for_each(filtered_symbols, match_subprogram);
+  llvm::for_each(filtered_symbols, match_proc_binding);
 }
 
