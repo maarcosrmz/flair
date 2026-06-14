@@ -1,0 +1,5 @@
+    ! Instance layout: stable ABI -- PyObject_HEAD is opaque (sizeof(PyObject)=16 on 64-bit).
+    type, bind(C) :: {struct}
+        integer(c_int8_t) :: ob_head(16)  ! opaque PyObject_HEAD
+        type(c_ptr)       :: {ptr_field}   ! opaque ptr -> heap-allocated Fortran {tname}
+    end type

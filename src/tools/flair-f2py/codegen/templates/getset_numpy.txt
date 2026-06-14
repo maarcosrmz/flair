@@ -1,0 +1,98 @@
+    ! ===== {field} property -- NumPy array view into p%{field} (rank 1) =====
+
+    ! getter: writeable, aligned view; Fortran owns the memory; the base object
+    ! keeps the instance alive as long as any live view does.  p%{field} is
+    ! allocatable, hence contiguous by definition -- default strides are valid.
+    function {get_fn}(self, closure) bind(C) result(r)
+        type(c_ptr), value :: self, closure
+        type(c_ptr) :: r, descr
+        type({struct}), pointer :: pt
+        type({tname}), pointer :: p
+        integer(c_ptrdiff_t), target :: dims_arr(1)
+        integer(c_int) :: rc
+
+        r = c_null_ptr
+        if (.not. c_associated(numpy_api_ptr)) then
+            call PyErr_SetString(PyExc_RuntimeError, c_loc(s_numpy_req))
+            return
+        end if
+
+        call c_f_pointer(self, pt)
+        call c_f_pointer(pt%{ptr_field}, p)
+
+        if (.not. allocated(p%{field}) .or. size(p%{field}) == 0) then
+            ! Empty array: NumPy allocates its own (zero-byte) buffer; no base needed.
+            dims_arr(1) = 0_c_ptrdiff_t
+            descr = PyArray_DescrFromType({npy})
+            r = PyArray_NewFromDescr(PyArray_Type_ptr, descr, 1_c_int, &
+                    c_loc(dims_arr), c_null_ptr, c_null_ptr, &
+                    NPY_ARRAY_BEHAVED + NPY_ARRAY_OWNDATA, c_null_ptr)
+            return
+        end if
+
+        dims_arr(1) = int(size(p%{field}), c_ptrdiff_t)
+        descr = PyArray_DescrFromType({npy})
+        r = PyArray_NewFromDescr(PyArray_Type_ptr, descr, 1_c_int, &
+                c_loc(dims_arr), c_null_ptr, c_loc(p%{field}(1)), &
+                NPY_ARRAY_BEHAVED, c_null_ptr)
+        if (.not. c_associated(r)) return
+        call Py_IncRef(self)          ! give SetBaseObject a reference to steal
+        rc = PyArray_SetBaseObject(r, self)
+    end function
+
+    ! setter: coerce to {npy} (any memory layout) and copy into a fresh allocatable
+    ! via the buffer protocol, honouring shape and (possibly negative) stride.
+    function {set_fn}(self, value, closure) bind(C) result(r)
+        type(c_ptr), value :: self, value, closure
+        integer(c_int) :: r
+        type({struct}), pointer :: pt
+        type({tname}), pointer :: p
+        type(c_ptr) :: arr, descr
+        type(Py_buffer_t), target :: pybuf
+        integer(c_ptrdiff_t), pointer :: buf_shape(:), buf_strides(:)
+        integer(c_ptrdiff_t) :: n, stride_elem, total_span, base_addr
+        integer(c_int) :: buf_rc
+        {raw_type}, pointer :: raw(:)
+
+        r = -1
+        if (.not. c_associated(value)) then
+            call PyErr_SetString(PyExc_TypeError, c_loc({s_del}))
+            return
+        end if
+        if (.not. c_associated(numpy_api_ptr)) then
+            call PyErr_SetString(PyExc_RuntimeError, c_loc(s_numpy_req))
+            return
+        end if
+
+        descr = PyArray_DescrFromType({npy})
+        arr = PyArray_FromAny(value, descr, 1, 1, 0, c_null_ptr)
+        if (.not. c_associated(arr)) return
+
+        buf_rc = PyObject_GetBuffer(arr, c_loc(pybuf), PyBUF_STRIDES)
+        call Py_DecRef(arr)
+        if (buf_rc /= 0) return
+
+        call c_f_pointer(pybuf%shape,   buf_shape,   [1_c_ptrdiff_t])
+        call c_f_pointer(pybuf%strides, buf_strides, [1_c_ptrdiff_t])
+        n           = buf_shape(1)
+        stride_elem = buf_strides(1) / {elem_bytes}_c_ptrdiff_t  ! signed stride in elements
+
+        call c_f_pointer(self, pt)
+        call c_f_pointer(pt%{ptr_field}, p)
+        if (allocated(p%{field})) deallocate(p%{field})
+        if (n > 0) then
+            allocate(p%{field}(n))
+            total_span = 1_c_ptrdiff_t + (n - 1_c_ptrdiff_t) * abs(stride_elem)
+            if (stride_elem > 0) then
+                call c_f_pointer(pybuf%buf, raw, [total_span])
+                p%{field} = raw(1:total_span:stride_elem)
+            else
+                base_addr = transfer(pybuf%buf, 0_c_ptrdiff_t) &
+                          + (n - 1_c_ptrdiff_t) * buf_strides(1)
+                call c_f_pointer(transfer(base_addr, c_null_ptr), raw, [total_span])
+                p%{field} = raw(total_span:1:stride_elem)
+            end if
+        end if
+        call PyBuffer_Release(c_loc(pybuf))
+        r = 0
+    end function

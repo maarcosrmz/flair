@@ -1,0 +1,28 @@
+    ! ===== {field} property (scalar) =====
+
+    function {get_fn}(self, closure) bind(C) result(r)
+        type(c_ptr), value :: self, closure
+        type(c_ptr) :: r
+        type({struct}), pointer :: pt
+        type({tname}), pointer :: p
+        call c_f_pointer(self, pt)
+        call c_f_pointer(pt%{ptr_field}, p)
+        r = {to_py_field}
+    end function
+
+    function {set_fn}(self, value, closure) bind(C) result(r)
+        type(c_ptr), value :: self, value, closure
+        integer(c_int) :: r
+        type({struct}), pointer :: pt
+        type({tname}), pointer :: p
+        r = -1
+        if (.not. c_associated(value)) then
+            call PyErr_SetString(PyExc_TypeError, c_loc({s_del}))
+            return
+        end if
+        call c_f_pointer(self, pt)
+        call c_f_pointer(pt%{ptr_field}, p)
+        p%{field} = {from_py_value}
+        if (c_associated(PyErr_Occurred())) return
+        r = 0
+    end function

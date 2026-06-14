@@ -13,7 +13,7 @@ function(add_tool TOOL_NAME)
   # Configure annoteate tool target
   target_compile_features(${TOOL_NAME} PRIVATE cxx_std_17)
   target_include_directories(${TOOL_NAME} PRIVATE ${PROJECT_SOURCE_DIR}/src)
-  target_link_libraries(${TOOL_NAME} PRIVATE fmt::fmt flang_llvm)
+  target_link_libraries(${TOOL_NAME} PRIVATE flu fmt::fmt flang_llvm)
   set_target_properties(${TOOL_NAME} PROPERTIES POSITION_INDEPENDENT_CODE ON)
   
   # Install the tool

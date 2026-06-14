@@ -1,0 +1,5 @@
+    function {fn}(self, args) bind(C) result(r)
+        type(c_ptr), value :: self, args
+        type(c_ptr) :: r
+{body}
+    end function

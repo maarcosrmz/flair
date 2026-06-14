@@ -67,4 +67,5 @@ endif()
 
 # ========= Build all components ==========
 
+add_subdirectory(flu)
 add_subdirectory(tools)

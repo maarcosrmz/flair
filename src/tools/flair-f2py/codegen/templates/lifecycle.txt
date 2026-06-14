@@ -1,0 +1,29 @@
+    ! ===== Lifecycle: {tname} =====
+
+    function {new_fn}(type_ptr, args, kwds) bind(C) result(r)
+        type(c_ptr), value :: type_ptr, args, kwds
+        type(c_ptr) :: r
+        type({struct}), pointer :: pt
+        type({tname}), pointer :: p
+{new_body}
+    end function
+
+    function {init_fn}(self, args, kwds) bind(C) result(r)
+        type(c_ptr), value :: self, args, kwds
+        integer(c_int) :: r
+{init_body}
+        r = 0
+    end function
+
+    subroutine {dealloc_fn}(self) bind(C)
+        type(c_ptr), value :: self
+        type({struct}), pointer :: pt
+        type({tname}), pointer :: p
+
+        call c_f_pointer(self, pt)
+        if (c_associated(pt%{ptr_field})) then
+            call c_f_pointer(pt%{ptr_field}, p)
+            deallocate(p)
+        end if
+        call PyObject_Free(self)
+    end subroutine

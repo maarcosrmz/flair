@@ -3,9 +3,12 @@
 #include <flang/Semantics/symbol.h>
 #include <llvm/ADT/STLExtras.h>
 #include <memory>
+#include <fstream>
+#include <iostream>
 
 #include "custom_action.hpp"
 #include "traversal.hpp"
+#include "codegen/codegen.hpp"
 
 void custom_action::executeAction() {
   // If error after parsing, exit immediately
@@ -24,10 +27,11 @@ void custom_action::executeAction() {
     wdata->modules.push_back(std::move(mi));
   }
 
-  // Codegen
+  // Codegen: one py_<module>.F90 wrapper per module with wrappable entities.
   for (auto const &mi : wdata->modules) {
-    // str_t code = codegen_module(mi);
-    // str_t outfilename = mi.source_file_full_stem + .wrap.f90 
-    // std::ofstream(outfilename) << code;
+    if (not codegen::has_wrappable(mi)) continue;
+    std::string const outfile = "py_" + codegen::module_pyname(mi.name) + ".F90";
+    std::ofstream(outfile) << codegen::codegen_module(mi);
+    std::cout << "Generated " << outfile << std::endl;
   }
 }
