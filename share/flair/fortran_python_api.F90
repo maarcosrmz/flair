@@ -42,8 +42,13 @@ module python_api_mod
     integer(c_int), parameter :: NPY_FEATURE_VERSION = int(Z'00000010', c_int) ! NPY_1_23_API_VERSION (see default NPY_FEATURE_VERSION in numpyconfig.h)
     character(kind=c_char, len=*), parameter :: NPY_FEATURE_VERSION_STRING = "1.23"
 
-    ! Type codes
-    integer(c_int), parameter :: NPY_INT64 = 7  ! NPY_LONG on 64-bit Linux
+    ! Type codes (x86-64 Linux; long = 8 bytes)
+    integer(c_int), parameter :: NPY_INT8   =  1  ! NPY_BYTE
+    integer(c_int), parameter :: NPY_INT16  =  3  ! NPY_SHORT
+    integer(c_int), parameter :: NPY_INT32  =  5  ! NPY_INT
+    integer(c_int), parameter :: NPY_INT64  =  7  ! NPY_LONG
+    integer(c_int), parameter :: NPY_FLOAT32 = 11 ! NPY_FLOAT
+    integer(c_int), parameter :: NPY_FLOAT64 = 12 ! NPY_DOUBLE
 
     ! Array flags
     integer(c_int), parameter :: NPY_ARRAY_C_CONTIGUOUS = 1     ! 0x001
