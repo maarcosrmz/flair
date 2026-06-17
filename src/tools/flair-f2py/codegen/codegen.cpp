@@ -48,24 +48,24 @@ str_t codegen_module(module_info_t const &m) {
     semantics::Symbol const &tsym = *dt.ptr;
     str_t const tn = tname(tsym), cls = clsname(tsym);
 
-    structs += gen_object_struct(tsym);
+    structs += gen_object_struct(dt);
 
-    std::vector<sym_ptr_t> fields = public_fields(tsym);
-    procedures += gen_lifecycle(tsym, fields, strings) + "\n";
+    std::vector<sym_ptr_t> fields = public_fields(dt);
+    procedures += gen_lifecycle(dt, fields, strings) + "\n";
 
     str_t method_fills;
     int nm = 0;
     for (fnt_info_t const &mth : dt.methods) {
       if (mth.ptr == nullptr) continue;
       if (auto const *act = flu::binding_actual(*mth.ptr)) bound.insert(act);
-      procedures += gen_method(tsym, *mth.ptr, m, strings, method_fills, nm);
+      procedures += gen_method(dt, *mth.ptr, m, strings, method_fills, nm);
     }
     method_fills += method_sentinel(tn + "_methods", nm + 1);
 
     str_t getset_fills;
     int ng = 0;
     for (sym_ptr_t f : fields)
-      procedures += gen_getset(tsym, *f, strings, getset_fills, ng);
+      procedures += gen_getset(dt, *f, strings, getset_fills, ng);
     getset_fills += getset_sentinel(tn + "_getset", ng + 1);
 
     table_decls += fmt::format("    type(PyMethodDef_t), target, save :: {}_methods({})\n", tn, nm + 1);
