@@ -14,6 +14,10 @@ Fortran::semantics::Symbol const *binding_actual(Fortran::semantics::Symbol cons
 // Rank of an object entity (0 = scalar / non-object).
 int rank_of(Fortran::semantics::Symbol const &sym);
 
+// Whether a symbol has the POINTER / ALLOCATABLE attribute.
+bool is_pointer(Fortran::semantics::Symbol const &sym);
+bool is_allocatable(Fortran::semantics::Symbol const &sym);
+
 // Public object-entity components of a derived type, in declaration order.
 std::vector<Fortran::semantics::Symbol const *> public_components(
     Fortran::semantics::Symbol const &type_sym);

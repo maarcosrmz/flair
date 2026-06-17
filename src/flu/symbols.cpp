@@ -21,6 +21,14 @@ int rank_of(semantics::Symbol const &sym) {
   return 0;
 }
 
+bool is_pointer(semantics::Symbol const &sym) {
+  return sym.attrs().test(semantics::Attr::POINTER);
+}
+
+bool is_allocatable(semantics::Symbol const &sym) {
+  return sym.attrs().test(semantics::Attr::ALLOCATABLE);
+}
+
 std::vector<semantics::Symbol const *> public_components(semantics::Symbol const &type_sym) {
   std::vector<semantics::Symbol const *> out;
   auto const *scope = type_sym.scope();

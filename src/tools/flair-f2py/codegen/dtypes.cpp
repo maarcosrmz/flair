@@ -32,6 +32,9 @@ static constexpr char tpl_getset_scalar[] = {
 static constexpr char tpl_getset_numpy[] = {
 #embed "templates/getset_numpy.txt"
   , '\0'};
+static constexpr char tpl_getset_numpy_ptr[] = {
+#embed "templates/getset_numpy_ptr.txt"
+  , '\0'};
 static constexpr char tpl_method[] = {
 #embed "templates/method.txt"
   , '\0'};
@@ -41,10 +44,11 @@ std::vector<sym_ptr_t> public_fields(semantics::Symbol const &type_sym) {
   std::vector<sym_ptr_t> out;
   for (sym_ptr_t c : flu::public_components(type_sym)) {
     auto const *t = c->GetType();
-    if (t == nullptr || !intrinsic_supported(*t)) continue; // intrinsic real/integer only (step 1)
+    if (t == nullptr || !intrinsic_supported(*t)) continue; // intrinsic real/integer only for now
     int const rank = flu::rank_of(*c);
-    if (rank != 0 && rank != 1) continue;                   // scalar or rank-1 array only
-    out.push_back(c);
+    if (rank == 0) { out.push_back(c); continue; }
+    // rank-1 arrays and allocatable/pointer for now
+    if (rank == 1 && (flu::is_allocatable(*c) || flu::is_pointer(*c))) out.push_back(c);
   }
   return out;
 }
@@ -159,12 +163,22 @@ str_t gen_getset(semantics::Symbol const &tsym, semantics::Symbol const &comp,
   ++n;
   fills += getset_row(tn + "_getset", n, strings.intern(field), getter, setter);
 
-  if (flu::rank_of(comp) == 1)
+  if (flu::rank_of(comp) == 1) {
+    if (flu::is_pointer(comp))
+      return render(tpl_getset_numpy_ptr, {
+        {"get_fn", getter}, {"set_fn", setter}, {"struct", struct_name(tsym)},
+        {"tname", tn}, {"ptr_field", ptr_field(tsym)}, {"field", field},
+        {"npy", npy(*t)}, {"raw_type", ftype(*t)},
+        {"elem_bytes", std::to_string(flu::kind_of(*t))}, {"s_del", s_del},
+        {"s_unassoc", strings.intern("cannot set unassociated " + field)},
+        {"s_size", strings.intern("size mismatch for " + field)}}) + "\n";
+
     return render(tpl_getset_numpy, {
       {"get_fn", getter}, {"set_fn", setter}, {"struct", struct_name(tsym)},
       {"tname", tn}, {"ptr_field", ptr_field(tsym)}, {"field", field},
       {"npy", npy(*t)}, {"raw_type", ftype(*t)},
       {"elem_bytes", std::to_string(flu::kind_of(*t))}, {"s_del", s_del}}) + "\n";
+  }
 
   return render(tpl_getset_scalar, {
     {"get_fn", getter}, {"set_fn", setter}, {"struct", struct_name(tsym)},

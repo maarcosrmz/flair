@@ -1,10 +1,11 @@
-    ! ===== {field} property -- NumPy array copy of p%{field} (rank 1) =====
+    ! ===== {field} property -- NumPy array copy of p%{field} (rank 1, pointer) =====
 
     ! getter: returns a freshly-allocated, NumPy-owned copy of p%{field}.
-    ! NumPy allocates and owns the buffer (NPY_ARRAY_OWNDATA), so the returned
-    ! array is fully independent of the Fortran instance -- no base object, no
-    ! aliasing, and no contiguity assumptions about the source. The copy is taken
-    ! via Fortran array assignment into the contiguous NumPy buffer.
+    ! p%{field} is a pointer and may alias a strided (non-contiguous) target; the
+    ! copy is taken via Fortran whole-array assignment, which honours the source
+    ! layout, so any strided target is flattened to a plain contiguous result. NumPy
+    ! owns the buffer (NPY_ARRAY_OWNDATA), so the result is fully independent of the
+    ! Fortran instance -- no base object, no aliasing.
     function {get_fn}(self, closure) bind(C) result(r)
         type(c_ptr), value :: self, closure
         type(c_ptr) :: r, descr
@@ -23,7 +24,7 @@
         call c_f_pointer(self, pt)
         call c_f_pointer(pt%{ptr_field}, p)
 
-        if (allocated(p%{field})) then
+        if (associated(p%{field})) then
             n = int(size(p%{field}), c_ptrdiff_t)
         else
             n = 0_c_ptrdiff_t
@@ -37,13 +38,14 @@
         if (.not. c_associated(r)) return
         if (n > 0) then
             call c_f_pointer(PyArray_DATA(r), raw, [n])
-            raw = p%{field}
+            raw = p%{field}          ! whole-array copy honours the (possibly strided) source layout
         end if
     end function
 
-    ! setter: coerce to {npy} (any memory layout) and copy into a fresh allocatable.
-    ! Shape/stride/data are read with the NumPy array accessors, honouring a
-    ! (possibly negative) stride.
+    ! setter: write through the associated target (no realloc). Requires the pointer
+    ! to be associated and the incoming size to match; copies element-wise honouring
+    ! the incoming (possibly negative) stride. Intrinsic assignment to a pointer
+    ! writes into its target, so a strided target is updated in place.
     function {set_fn}(self, value, closure) bind(C) result(r)
         type(c_ptr), value :: self, value, closure
         integer(c_int) :: r
@@ -63,6 +65,13 @@
             return
         end if
 
+        call c_f_pointer(self, pt)
+        call c_f_pointer(pt%{ptr_field}, p)
+        if (.not. associated(p%{field})) then
+            call PyErr_SetString(PyExc_RuntimeError, c_loc({s_unassoc}))
+            return
+        end if
+
         descr = PyArray_DescrFromType({npy})
         arr = PyArray_FromAny(value, descr, 1, 1, 0, c_null_ptr)
         if (.not. c_associated(arr)) return
@@ -72,11 +81,13 @@
         stride_elem  = stride_bytes / {elem_bytes}_c_ptrdiff_t  ! signed stride in elements
         data_ptr     = PyArray_DATA(arr)
 
-        call c_f_pointer(self, pt)
-        call c_f_pointer(pt%{ptr_field}, p)
-        if (allocated(p%{field})) deallocate(p%{field})
+        if (n /= int(size(p%{field}), c_ptrdiff_t)) then
+            call Py_DecRef(arr)
+            call PyErr_SetString(PyExc_ValueError, c_loc({s_size}))
+            return
+        end if
+
         if (n > 0) then
-            allocate(p%{field}(n))
             total_span = 1_c_ptrdiff_t + (n - 1_c_ptrdiff_t) * abs(stride_elem)
             if (stride_elem > 0) then
                 call c_f_pointer(data_ptr, raw, [total_span])

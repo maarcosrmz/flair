@@ -107,22 +107,24 @@ module python_api_mod
         type(c_ptr)          :: m_free
     end type
 
-    ! PEP 3118 buffer struct (stable ABI; sizeof=80 on 64-bit)
-    ! offsets: buf@0(8), obj@8(8), len@16(8), itemsize@24(8),
-    !          readonly@32(4), ndim@36(4), format@40(8), shape@48(8),
-    !          strides@56(8), suboffsets@64(8), internal@72(8)
-    type, bind(C) :: Py_buffer_t
-        type(c_ptr)          :: buf
-        type(c_ptr)          :: obj
-        integer(c_ptrdiff_t) :: len
-        integer(c_ptrdiff_t) :: itemsize
-        integer(c_int)       :: readonly
-        integer(c_int)       :: ndim
-        type(c_ptr)          :: format
-        type(c_ptr)          :: shape
-        type(c_ptr)          :: strides
-        type(c_ptr)          :: suboffsets
-        type(c_ptr)          :: internal
+    ! NumPy ndarray internal layout (numpy/ndarraytypes.h: PyArrayObject_fields).
+    ! Mirrored so the PyArray_* accessors below can read it directly. sizeof=96.
+    ! offsets: data@16(8), nd@24(4), dimensions@32(8), strides@40(8), base@48(8),
+    !          descr@56(8), flags@64(4), weakreflist@72(8), buffer_info@80(8), mem_handler@88(8)
+    type, bind(C) :: PyArrayObject_fields_t
+        integer(c_int8_t) :: ob_base(16)   ! PyObject_HEAD
+        type(c_ptr)       :: data          ! char *
+        integer(c_int)    :: nd
+        integer(c_int)    :: pad0
+        type(c_ptr)       :: dimensions    ! npy_intp *
+        type(c_ptr)       :: strides       ! npy_intp *
+        type(c_ptr)       :: base
+        type(c_ptr)       :: descr
+        integer(c_int)    :: flags
+        integer(c_int)    :: pad1
+        type(c_ptr)       :: weakreflist
+        type(c_ptr)       :: buffer_info   ! NPY_FEATURE_VERSION >= 1.20
+        type(c_ptr)       :: mem_handler   ! NPY_FEATURE_VERSION >= 1.22
     end type
 
     ! ===== Exception objects (exported symbols from the interpreter) =====
@@ -509,6 +511,42 @@ contains
         end if
 
         r = 0_c_int
+    end function
+
+    ! ===== NumPy array accessors =====
+    ! Fortran re-implementations of the inline PyArray_* accessors (which are not
+    ! in the capsule API table, so cannot be called from Fortran). They read the
+    ! mirrored PyArrayObject_fields directly. `arr` is a PyObject* to an ndarray;
+    ! DIM/STRIDE take a 0-based dimension index, like the C macros.
+
+    function PyArray_DATA(arr) result(r)
+        type(c_ptr), value :: arr
+        type(c_ptr) :: r
+        type(PyArrayObject_fields_t), pointer :: f
+        call c_f_pointer(arr, f)
+        r = f%data
+    end function
+
+    function PyArray_DIM(arr, idim) result(r)
+        type(c_ptr), value :: arr
+        integer(c_int), value :: idim
+        integer(c_ptrdiff_t) :: r
+        type(PyArrayObject_fields_t), pointer :: f
+        integer(c_ptrdiff_t), pointer :: dims(:)
+        call c_f_pointer(arr, f)
+        call c_f_pointer(f%dimensions, dims, [int(f%nd, c_ptrdiff_t)])
+        r = dims(idim + 1)
+    end function
+
+    function PyArray_STRIDE(arr, istride) result(r)
+        type(c_ptr), value :: arr
+        integer(c_int), value :: istride
+        integer(c_ptrdiff_t) :: r
+        type(PyArrayObject_fields_t), pointer :: f
+        integer(c_ptrdiff_t), pointer :: strd(:)
+        call c_f_pointer(arr, f)
+        call c_f_pointer(f%strides, strd, [int(f%nd, c_ptrdiff_t)])
+        r = strd(istride + 1)
     end function
 
 end module python_api_mod
