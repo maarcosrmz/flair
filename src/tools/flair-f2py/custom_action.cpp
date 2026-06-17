@@ -21,6 +21,9 @@ void custom_action::executeAction() {
   for (auto const &[name, sym_ref] : root) {
     semantics::Symbol const &sym = sym_ref.get();
     if (not sym.has<semantics::ModuleDetails>()) continue;
+    // If the origin of the module is a .mod file, skip it.
+    // Avoids transitive traversal of USEd modules.
+    if (sym.test(semantics::Symbol::Flag::ModFile)) continue;
 
     module_info_t mi(name.ToString());
     traverse_module(sym, mi);
