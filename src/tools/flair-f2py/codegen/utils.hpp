@@ -30,15 +30,19 @@ struct string_pool_t {
 };
 
 // Wrapper names derived from a flang type Symbol.
-str_t tname(Fortran::semantics::Symbol const &s);       // folded lowercase, e.g. "point"
-str_t clsname(Fortran::semantics::Symbol const &s);     // Python class name, e.g. "Point"
+str_t tname(
+    Fortran::semantics::Symbol const &s); // folded lowercase, e.g. "point"
+str_t clsname(
+    Fortran::semantics::Symbol const &s); // Python class name, e.g. "Point"
 str_t struct_name(Fortran::semantics::Symbol const &s); // "py_<t>_object_t"
 str_t ptr_field(Fortran::semantics::Symbol const &s);   // "<t>_ptr"
 
 // PyInit table-fill rows.
-str_t method_row(str_t const &tbl, int idx, str_t const &name_var, str_t const &wrapper, str_t const &flags);
+str_t method_row(str_t const &tbl, int idx, str_t const &name_var,
+                 str_t const &wrapper, str_t const &flags);
 str_t method_sentinel(str_t const &tbl, int idx);
-str_t getset_row(str_t const &tbl, int idx, str_t const &name_var, str_t const &getter, str_t const &setter);
+str_t getset_row(str_t const &tbl, int idx, str_t const &name_var,
+                 str_t const &getter, str_t const &setter);
 str_t getset_sentinel(str_t const &tbl, int idx);
 
 } // namespace codegen

@@ -1,6 +1,6 @@
 #pragma once
-#include <string>
 #include "../wdata.hpp"
+#include <string>
 
 namespace codegen {
 

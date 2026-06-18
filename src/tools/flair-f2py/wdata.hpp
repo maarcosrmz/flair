@@ -1,30 +1,34 @@
 #pragma once
-#include "flang/Semantics/symbol.h"
 #include "flang/Frontend/CompilerInstance.h"
+#include "flang/Semantics/symbol.h"
 
 using namespace Fortran;
 
-using sym_ptr_t = semantics::Symbol const *; 
+using sym_ptr_t = semantics::Symbol const *;
 using str_t = std::string;
 
 struct fnt_info_t {
   sym_ptr_t ptr = nullptr; // may have ProcBindingDetails or SubprogramDetails
-  bool rewrite  = false;
+  bool rewrite = false;
   sym_ptr_t parent;
-  // [[nodiscard]] semantics::ProcBindingDetails const &prog_binding_details() const { return ref.get<semantics::ProcBindingDetails>(); } 
-  // [[nodiscard]] semantics::SubprogramDetails const &subprogram_details() const { return ref.get<semantics::SubprogramDetails>(); } 
+  // [[nodiscard]] semantics::ProcBindingDetails const &prog_binding_details()
+  // const { return ref.get<semantics::ProcBindingDetails>(); }
+  // [[nodiscard]] semantics::SubprogramDetails const &subprogram_details()
+  // const { return ref.get<semantics::SubprogramDetails>(); }
 };
 
 struct dtype_info_t {
-  sym_ptr_t ptr  = nullptr;
+  sym_ptr_t ptr = nullptr;
   sym_ptr_t base = nullptr;
 
-  std::vector<fnt_info_t> methods; // type-bound procedures 
-                                   // all have ProcBindingDetails (SourceName - rename) -> SubprogramDetails (actual subprogram)
+  std::vector<fnt_info_t>
+      methods; // type-bound procedures
+               // all have ProcBindingDetails (SourceName - rename) ->
+               // SubprogramDetails (actual subprogram)
 
   fnt_info_t ctor; // p => dtype_t()
   fnt_info_t init; // dtype_t :: p; dtype_t_init(p)
-  
+
   // finalizers are handled automatically when deallcoate
   // is called or the respective object goes out of scope
 
@@ -37,7 +41,7 @@ struct dtype_info_t {
 struct module_info_t {
   str_t name;
   // source file
-  // source file full stem 
+  // source file full stem
   // documentation
 
   std::vector<fnt_info_t> functions;

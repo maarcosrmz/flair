@@ -11,5 +11,4 @@ namespace flair::semantics {
 
 void traverse_module(sema::Symbol const &mod_sym, module_info_t &mi);
 
-} // flair::semantics
-
+} // namespace flair::semantics

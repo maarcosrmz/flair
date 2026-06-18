@@ -2,9 +2,9 @@
 #include <flang/Parser/char-block.h>
 #include <llvm/ADT/STLExtras.h>
 
+#include "../codegen/codegen.hpp"
 #include "custom_action.hpp"
 #include "traversal.hpp"
-#include "../codegen/codegen.hpp"
 
 namespace flair::parser {
 
@@ -13,4 +13,3 @@ void custom_action::executeAction() {
 }
 
 } // namespace flair::parser
-

@@ -4,5 +4,3 @@
 #include <llvm/Support/CommandLine.h>
 
 #include "traversal.hpp"
-
-

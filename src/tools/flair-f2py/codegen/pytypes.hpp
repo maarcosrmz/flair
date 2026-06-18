@@ -12,7 +12,8 @@ using str_t = std::string;
 
 // Fortran -> Python/NumPy type mapping, built on the flu type queries.
 
-// NumPy element code for a supported intrinsic real/integer; "NPY_NOTYPE" otherwise.
+// NumPy element code for a supported intrinsic real/integer; "NPY_NOTYPE"
+// otherwise.
 str_t npy(Fortran::semantics::DeclTypeSpec const &t);
 
 // real(4/8) or integer(1/2/4/8) -- the intrinsic scalar/element types we wrap.

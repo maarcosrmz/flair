@@ -1,12 +1,12 @@
+#include <iostream>
 #include <memory>
 #include <stdexcept>
-#include <iostream>
 
-#include "clang/Basic/Diagnostic.h"
-#include "clang/Basic/DiagnosticOptions.h"
 #include "flang/Frontend/CompilerInstance.h"
 #include "flang/Frontend/FrontendAction.h"
 #include "flang/Frontend/TextDiagnosticBuffer.h"
+#include "clang/Basic/Diagnostic.h"
+#include "clang/Basic/DiagnosticOptions.h"
 #include "llvm/Support/TargetSelect.h"
 
 #include "parser/custom_action.hpp"
@@ -21,39 +21,46 @@ int main(int argc, const char **argv) try {
   bool with_sema = false;
   if (argc > 1) {
     std::string arg = argv[1];
-    if (arg == "-s") with_sema = true;
+    if (arg == "-s")
+      with_sema = true;
   }
 
   // ------- main tool
-  
-  std::unique_ptr<Fortran::frontend::CompilerInstance> flang = std::make_unique<Fortran::frontend::CompilerInstance>();
+
+  std::unique_ptr<Fortran::frontend::CompilerInstance> flang =
+      std::make_unique<Fortran::frontend::CompilerInstance>();
 
   flang->createDiagnostics();
   if (!flang->hasDiagnostics())
     return 1;
 
-  auto diagsBuffer = std::make_unique<Fortran::frontend::TextDiagnosticBuffer>();
+  auto diagsBuffer =
+      std::make_unique<Fortran::frontend::TextDiagnosticBuffer>();
 
   clang::DiagnosticOptions diagOpts;
-  clang::DiagnosticsEngine diags(clang::DiagnosticIDs::create(), diagOpts, diagsBuffer.get(), /*ShouldOwnClient=*/false);
+  clang::DiagnosticsEngine diags(clang::DiagnosticIDs::create(), diagOpts,
+                                 diagsBuffer.get(), /*ShouldOwnClient=*/false);
 
   llvm::SmallVector<const char *, 256> args(argv, argv + argc);
   bool success = Fortran::frontend::CompilerInvocation::createFromArgs(
-          flang->getInvocation(), llvm::ArrayRef(args).slice(with_sema ? 2 : 1), diags, args[0]);
+      flang->getInvocation(), llvm::ArrayRef(args).slice(with_sema ? 2 : 1),
+      diags, args[0]);
   if (!success)
     throw std::runtime_error("Failed creating compiler invocation.");
 
   // Workaround for flang 22.1.5 bugs in intrinsic module dir handling:
   // 1. -fintrinsic-modules-path dirs are only added to searchDirectories, not
   //    intrinsicModuleDirectories (use,intrinsic:: uses the latter).
-  // 2. Default intrinsic dir is derived from /proc/self/exe (flair-f2py), not args[0].
+  // 2. Default intrinsic dir is derived from /proc/self/exe (flair-f2py), not
+  // args[0].
   {
-    auto &ppOpts      = flang->getInvocation().getPreprocessorOpts();
+    auto &ppOpts = flang->getInvocation().getPreprocessorOpts();
     auto &fortranOpts = flang->getInvocation().getFortranOpts();
     for (auto const &dir : ppOpts.searchDirectoriesFromIntrModPath)
       fortranOpts.intrinsicModuleDirectories.emplace_back(dir);
     llvm::SmallString<128> defaultIntrDir("/usr/include/flang");
-    fortranOpts.intrinsicModuleDirectories.emplace_back(std::string(defaultIntrDir));
+    fortranOpts.intrinsicModuleDirectories.emplace_back(
+        std::string(defaultIntrDir));
   }
 
   llvm::InitializeAllTargets();
@@ -67,7 +74,7 @@ int main(int argc, const char **argv) try {
     act = std::make_unique<flair::semantics::custom_action>();
   else
     act = std::make_unique<flair::parser::custom_action>();
-  
+
   success = flang->executeAction(*act);
   flang->clearOutputFiles(false);
 
