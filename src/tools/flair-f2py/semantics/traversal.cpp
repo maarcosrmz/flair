@@ -5,18 +5,20 @@
 
 #include "traversal.hpp"
 
+namespace flair::semantics {
+
 // Returns a pointer to the derived type in module_info_t, which matches the first argument 
 // of the initializer subroutine. Returns nullptr if there is no match.
-dtype_info_t *get_dtype_of_initializer(semantics::Symbol const &sym, module_info_t const &mi) {
-  auto const &subp = sym.get<semantics::SubprogramDetails>();
-  std::vector<semantics::Symbol *> const &args = subp.dummyArgs();
+dtype_info_t *get_dtype_of_initializer(sema::Symbol const &sym, module_info_t const &mi) {
+  auto const &subp = sym.get<sema::SubprogramDetails>();
+  std::vector<sema::Symbol *> const &args = subp.dummyArgs();
 
   if (args.empty() || args.front() == nullptr) return nullptr;
 
-  semantics::DeclTypeSpec const *type = args.front()->GetType();
+  sema::DeclTypeSpec const *type = args.front()->GetType();
   if (type == nullptr) return nullptr;
 
-  semantics::DerivedTypeSpec const *dts = type->AsDerived();
+  sema::DerivedTypeSpec const *dts = type->AsDerived();
   if (dts == nullptr) return nullptr;
 
   std::string const nm = sym.name().ToString();
@@ -31,14 +33,14 @@ dtype_info_t *get_dtype_of_initializer(semantics::Symbol const &sym, module_info
   return nullptr;
 }
 
-void traverse_module(semantics::Symbol const &mod_sym, module_info_t &mi) {
-  bool default_private = mod_sym.get<semantics::ModuleDetails>().isDefaultPrivate();
-  auto mod_scope = mod_sym.get<semantics::ModuleDetails>().scope();
+void traverse_module(sema::Symbol const &mod_sym, module_info_t &mi) {
+  bool default_private = mod_sym.get<sema::ModuleDetails>().isDefaultPrivate();
+  auto mod_scope = mod_sym.get<sema::ModuleDetails>().scope();
   if (mod_scope == nullptr) return;
 
-  auto const match_subprogram = [&default_private, &mi](semantics::Symbol const &sym) {
-    if (default_private and not sym.attrs().test(semantics::Attr::PUBLIC)) return;
-    if (not sym.has<semantics::SubprogramDetails>()) return;
+  auto const match_subprogram = [&default_private, &mi](sema::Symbol const &sym) {
+    if (default_private and not sym.attrs().test(sema::Attr::PUBLIC)) return;
+    if (not sym.has<sema::SubprogramDetails>()) return;
 
     fnt_info_t fi{&sym, false, nullptr};
     if (auto dt = get_dtype_of_initializer(sym, mi))
@@ -47,9 +49,9 @@ void traverse_module(semantics::Symbol const &mod_sym, module_info_t &mi) {
       mi.functions.emplace_back(fi);
   };
 
-  auto const match_interface = [&default_private, &mi](semantics::Symbol const &sym) {
-    if (default_private and not sym.attrs().test(semantics::Attr::PUBLIC)) return;
-    if (not sym.has<semantics::GenericDetails>()) return;
+  auto const match_interface = [&default_private, &mi](sema::Symbol const &sym) {
+    if (default_private and not sym.attrs().test(sema::Attr::PUBLIC)) return;
+    if (not sym.has<sema::GenericDetails>()) return;
 
     if (auto const &it = mi.derived_types.find(sym.name().ToString()); 
         it != mi.derived_types.end()) {
@@ -61,16 +63,16 @@ void traverse_module(semantics::Symbol const &mod_sym, module_info_t &mi) {
     // TODO: match other (procedure) interfaces
   };
 
-  auto const match_dtype = [&default_private, &mi](semantics::Symbol const &sym) {
-    if (default_private and not sym.attrs().test(semantics::Attr::PUBLIC)) return;
+  auto const match_dtype = [&default_private, &mi](sema::Symbol const &sym) {
+    if (default_private and not sym.attrs().test(sema::Attr::PUBLIC)) return;
 
     // A derived type may be shadowed in its module scope by a generic interface
     // of the same name. In that case the module-scope symbol carries GenericDetails
     // and the real type is reached via derivedType().
-    semantics::Symbol const *type_sym = &sym;
-    if (auto const *gd = sym.detailsIf<semantics::GenericDetails>())
+    sema::Symbol const *type_sym = &sym;
+    if (auto const *gd = sym.detailsIf<sema::GenericDetails>())
       type_sym = gd->derivedType();
-    if (type_sym == nullptr or not type_sym->has<semantics::DerivedTypeDetails>())
+    if (type_sym == nullptr or not type_sym->has<sema::DerivedTypeDetails>())
       return;
 
     auto const &[it, _] = mi.derived_types.emplace(type_sym->name().ToString(), type_sym);
@@ -81,10 +83,10 @@ void traverse_module(semantics::Symbol const &mod_sym, module_info_t &mi) {
     auto const *dtype_scope = type_sym->scope();
     if (dtype_scope == nullptr) return;
 
-    auto const match_proc_binding= [&dt](semantics::Symbol const &sym) {
-      if (not sym.has<semantics::ProcBindingDetails>()) return;
+    auto const match_proc_binding= [&dt](sema::Symbol const &sym) {
+      if (not sym.has<sema::ProcBindingDetails>()) return;
       // Type-bound procedure accesibility is public by default
-      if (sym.attrs().test(semantics::Attr::PRIVATE)) return;
+      if (sym.attrs().test(sema::Attr::PRIVATE)) return;
 
       dt.methods.emplace_back(fnt_info_t{&sym, false, dt.ptr});
     };
@@ -93,7 +95,7 @@ void traverse_module(semantics::Symbol const &mod_sym, module_info_t &mi) {
   };
 
   // Predicate to filter out compiler-generated entities
-  auto const is_not_compiler_generated = [](semantics::Symbol const&s) {
+  auto const is_not_compiler_generated = [](sema::Symbol const&s) {
     std::string const n = s.name().ToString();
     return not n.empty() and std::isalpha(static_cast<unsigned char>(n[0])) != 0;
   };
@@ -107,4 +109,6 @@ void traverse_module(semantics::Symbol const &mod_sym, module_info_t &mi) {
   llvm::for_each(filtered_symbols, match_interface);
   llvm::for_each(filtered_symbols, match_subprogram);
 }
+
+} // namespace flair::semantics
 

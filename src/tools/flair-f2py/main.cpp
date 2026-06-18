@@ -9,9 +9,8 @@
 #include "flang/Frontend/TextDiagnosticBuffer.h"
 #include "llvm/Support/TargetSelect.h"
 
-#include "custom_action.hpp"
-
-using namespace Fortran::frontend;
+#include "parser/custom_action.hpp"
+#include "semantics/custom_action.hpp"
 
 //====================   main    ==========================================
 
@@ -19,29 +18,35 @@ int main(int argc, const char **argv) try {
 
   // TODO: CMD line options, compilation database, logger, etc.
 
+  bool with_sema = false;
+  if (argc > 1) {
+    std::string arg = argv[1];
+    if (arg == "-s") with_sema = true;
+  }
+
   // ------- main tool
   
-  std::unique_ptr<CompilerInstance> flang = std::make_unique<CompilerInstance>();
+  std::unique_ptr<Fortran::frontend::CompilerInstance> flang = std::make_unique<Fortran::frontend::CompilerInstance>();
 
   flang->createDiagnostics();
   if (!flang->hasDiagnostics())
     return 1;
 
-  auto diagsBuffer = std::make_unique<TextDiagnosticBuffer>();
+  auto diagsBuffer = std::make_unique<Fortran::frontend::TextDiagnosticBuffer>();
 
   clang::DiagnosticOptions diagOpts;
   clang::DiagnosticsEngine diags(clang::DiagnosticIDs::create(), diagOpts, diagsBuffer.get(), /*ShouldOwnClient=*/false);
 
   llvm::SmallVector<const char *, 256> args(argv, argv + argc);
-  bool success = CompilerInvocation::createFromArgs(
-          flang->getInvocation(), llvm::ArrayRef(args).slice(1), diags, args[0]);
+  bool success = Fortran::frontend::CompilerInvocation::createFromArgs(
+          flang->getInvocation(), llvm::ArrayRef(args).slice(with_sema ? 2 : 1), diags, args[0]);
   if (!success)
     throw std::runtime_error("Failed creating compiler invocation.");
 
   // Workaround for flang 22.1.5 bugs in intrinsic module dir handling:
   // 1. -fintrinsic-modules-path dirs are only added to searchDirectories, not
   //    intrinsicModuleDirectories (use,intrinsic:: uses the latter).
-  // 2. Default intrinsic dir is derived from /proc/self/exe (clair-f2py), not args[0].
+  // 2. Default intrinsic dir is derived from /proc/self/exe (flair-f2py), not args[0].
   {
     auto &ppOpts      = flang->getInvocation().getPreprocessorOpts();
     auto &fortranOpts = flang->getInvocation().getFortranOpts();
@@ -57,9 +62,13 @@ int main(int argc, const char **argv) try {
 
   diagsBuffer->flushDiagnostics(flang->getDiagnostics());
 
-  const std::unique_ptr<custom_action> act = std::make_unique<custom_action>();
+  std::unique_ptr<Fortran::frontend::FrontendAction> act;
+  if (with_sema)
+    act = std::make_unique<flair::semantics::custom_action>();
+  else
+    act = std::make_unique<flair::parser::custom_action>();
+  
   success = flang->executeAction(*act);
-
   flang->clearOutputFiles(false);
 
   if (!success)

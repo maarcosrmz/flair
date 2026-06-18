@@ -8,7 +8,11 @@
 
 #include "custom_action.hpp"
 #include "traversal.hpp"
-#include "codegen/codegen.hpp"
+#include "../codegen/codegen.hpp"
+
+namespace sema = Fortran::semantics;
+
+namespace flair::semantics {
 
 void custom_action::executeAction() {
   // If error after parsing, exit immediately
@@ -17,13 +21,13 @@ void custom_action::executeAction() {
   wdata = std::make_shared<wdata_t>(&getInstance());
 
   // Traverse semantics
-  semantics::Scope &root = getInstance().getSemanticsContext().globalScope();
+  sema::Scope &root = getInstance().getSemanticsContext().globalScope();
   for (auto const &[name, sym_ref] : root) {
-    semantics::Symbol const &sym = sym_ref.get();
-    if (not sym.has<semantics::ModuleDetails>()) continue;
+    sema::Symbol const &sym = sym_ref.get();
+    if (not sym.has<sema::ModuleDetails>()) continue;
     // If the origin of the module is a .mod file, skip it.
     // Avoids transitive traversal of USEd modules.
-    if (sym.test(semantics::Symbol::Flag::ModFile)) continue;
+    if (sym.test(sema::Symbol::Flag::ModFile)) continue;
 
     module_info_t mi(name.ToString());
     traverse_module(sym, mi);
@@ -38,3 +42,5 @@ void custom_action::executeAction() {
     std::cout << "Generated " << outfile << std::endl;
   }
 }
+
+} // namespace flair::semantics

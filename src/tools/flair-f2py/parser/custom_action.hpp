@@ -1,12 +1,14 @@
 #pragma once
 #include "flang/Frontend/FrontendActions.h"
-#include "wdata.hpp"
+#include "../wdata.hpp"
+
+namespace flair::parser {
 
 // -----------------------------------------------
 // custom_action: FrontendAction that drives the full binding-generation pipeline.
-// executeAction() traverses the Semantics object while filling wdata,
+// executeAction() traverses the parse tree while filling wdata,
 // before writing the generated .wrap.f90 files.
-class custom_action : public Fortran::frontend::PrescanAndSemaAction {
+class custom_action : public Fortran::frontend::PrescanAndParseAction {
   std::shared_ptr<wdata_t> wdata;
 
   public:
@@ -14,3 +16,6 @@ class custom_action : public Fortran::frontend::PrescanAndSemaAction {
 
   void executeAction() override;
 };
+
+} // namespace flair::parser
+
