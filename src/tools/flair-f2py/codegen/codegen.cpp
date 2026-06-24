@@ -55,7 +55,7 @@ str_t codegen_module(module_info_t const &m) {
 
     structs += gen_object_struct(dt);
 
-    std::vector<sym_ptr_t> fields = public_fields(dt);
+    sema::SymbolVector fields = public_fields(dt);
     procedures += gen_lifecycle(dt, fields, strings) + "\n";
 
     str_t method_fills;
@@ -71,8 +71,8 @@ str_t codegen_module(module_info_t const &m) {
 
     str_t getset_fills;
     int ng = 0;
-    for (sym_ptr_t f : fields)
-      procedures += gen_getset(dt, *f, strings, getset_fills, ng);
+    for (const sema::Symbol &f : fields)
+      procedures += gen_getset(dt, f, strings, getset_fills, ng);
     getset_fills += getset_sentinel(tn + "_getset", ng + 1);
 
     table_decls +=
@@ -102,7 +102,16 @@ str_t codegen_module(module_info_t const &m) {
   for (auto const &fn : m.functions) {
     if (fn.ptr == nullptr || bound.count(fn.ptr))
       continue;
-    procedures += gen_module_function(*fn.ptr, m, strings, modfn_fills, nmod);
+    procedures += gen_module_function(*fn.ptr, m, strings, &modfn_fills, nmod);
+  }
+  for (auto const &iface : m.interfaces) {
+    if (iface.ptr == nullptr /* TODO: or bound to dtype (?) */)
+      continue;
+
+    sema::SymbolVector specific_procs = flu::get_specific_procs(*iface.ptr);
+    for (auto const &proc : specific_procs) {
+      procedures += gen_module_function(proc, m, strings, nullptr, nmod);
+    }
   }
   modfn_fills += method_sentinel("module_methods", nmod + 1);
 

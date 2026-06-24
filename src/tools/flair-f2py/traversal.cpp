@@ -1,5 +1,6 @@
 #include <flang/Semantics/symbol.h>
 #include <flang/Semantics/type.h>
+#include <iostream>
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/Support/CommandLine.h>
 
@@ -56,16 +57,22 @@ void traverse_module(sema::Symbol const &mod_sym, module_info_t &mi) {
     if (not sym.has<sema::GenericDetails>())
       return;
 
-    fnt_info_t fi{&sym, false, nullptr};
-    if (auto const &it = mi.derived_types.find(sym.name().ToString());
-        it != mi.derived_types.end()) {
-      // We have found an interface with the same name as a previously
-      // matched derived type => interface-as-constructor pattern match
-      it->second.ctor = std::move(fi);
-      return;
+    iface_info_t iface{&sym};
+    if (sym.get<sema::GenericDetails>().derivedType()) {
+      if (auto const &it = mi.derived_types.find(sym.name().ToString());
+          it != mi.derived_types.end()) {
+        // We have found an interface with the same name as a previously
+        // matched derived type => interface-as-constructor pattern match
+        it->second.ctor = std::move(iface);
+        return;
+      }
     }
 
-    // TODO: match other (procedure) interfaces
+    std::cout << "Interface " << sym.name().ToString() << " has "
+              << sym.detailsIf<sema::GenericDetails>()->specificProcs().size()
+              << " specific procedures" << std::endl;
+
+    mi.interfaces.emplace_back(iface);
   };
 
   auto const match_dtype = [&default_private, &mi](sema::Symbol const &sym) {

@@ -36,6 +36,6 @@ drop_self(std::vector<Fortran::semantics::Symbol *> const &dummies);
 // `n`). "" if skipped.
 str_t gen_module_function(Fortran::semantics::Symbol const &fn,
                           module_info_t const &m, string_pool_t &strings,
-                          str_t &fills, int &n);
+                          str_t *fills, int &n);
 
 } // namespace codegen

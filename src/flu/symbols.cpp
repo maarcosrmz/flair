@@ -29,20 +29,29 @@ bool is_allocatable(semantics::Symbol const &sym) {
   return sym.attrs().test(semantics::Attr::ALLOCATABLE);
 }
 
-std::vector<semantics::Symbol const *> public_components(semantics::Symbol const &type_sym) {
-  std::vector<semantics::Symbol const *> out;
+sema::SymbolVector public_components(sema::Symbol const &type_sym) {
+  sema::SymbolVector out;
   auto const *scope = type_sym.scope();
-  auto const *dtd   = type_sym.detailsIf<semantics::DerivedTypeDetails>();
+  auto const *dtd   = type_sym.detailsIf<sema::DerivedTypeDetails>();
   if (scope == nullptr || dtd == nullptr) return out;
   for (auto const &cn : dtd->componentNames()) {
     auto it = scope->find(cn);
     if (it == scope->end()) continue;
-    semantics::Symbol const &comp = it->second.get();
-    if (comp.attrs().test(semantics::Attr::PRIVATE)) continue;
-    if (!comp.has<semantics::ObjectEntityDetails>()) continue; // skip parent comp / procs
-    out.push_back(&comp);
+    sema::Symbol const &comp = it->second.get();
+    if (comp.attrs().test(sema::Attr::PRIVATE)) continue;
+    if (not comp.has<sema::ObjectEntityDetails>()) continue; // skip parent comp / procs
+    out.push_back(comp);
   }
   return out;
+}
+
+// We skip checking for the private attribute, as we need to generate a wrapper
+// for each specific procedure, which can be called within the interface wrapper.
+// The individual procedure wrappers are not exposed to the python module.
+sema::SymbolVector get_specific_procs(const sema::Symbol &iface_sym) {
+  auto const *gtd = iface_sym.detailsIf<sema::GenericDetails>();
+  if (gtd == nullptr) return sema::SymbolVector{};
+  return gtd->specificProcs();
 }
 
 } // namespace flu

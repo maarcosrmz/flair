@@ -17,6 +17,10 @@ struct fnt_info_t {
   // const { return ref.get<semantics::SubprogramDetails>(); }
 };
 
+struct iface_info_t {
+  sym_ptr_t ptr = nullptr;
+};
+
 struct dtype_info_t {
   sym_ptr_t ptr = nullptr;
   sym_ptr_t base = nullptr;
@@ -26,8 +30,8 @@ struct dtype_info_t {
                // all have ProcBindingDetails (SourceName - rename) ->
                // SubprogramDetails (actual subprogram)
 
-  fnt_info_t ctor; // p => dtype_t()
-  fnt_info_t init; // dtype_t :: p; dtype_t_init(p)
+  iface_info_t ctor; // p => dtype_t()
+  fnt_info_t init;   // dtype_t :: p; dtype_t_init(p)
 
   // finalizers are handled automatically when deallcoate
   // is called or the respective object goes out of scope
@@ -44,8 +48,9 @@ struct module_info_t {
   // source file full stem
   // documentation
 
-  std::vector<fnt_info_t> functions;
   std::map<str_t, dtype_info_t> derived_types;
+  std::vector<fnt_info_t> functions;
+  std::vector<iface_info_t> interfaces;
 
   module_info_t(str_t const &name) : name(name) {}
 };

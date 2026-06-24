@@ -104,7 +104,7 @@ drop_self(std::vector<semantics::Symbol *> const &dummies) {
 }
 
 str_t gen_module_function(semantics::Symbol const &fn, module_info_t const &m,
-                          string_pool_t &strings, str_t &fills, int &n) {
+                          string_pool_t &strings, str_t *fills, int &n) {
   if (!fn.has<semantics::SubprogramDetails>())
     return "";
   auto const &sub = fn.get<semantics::SubprogramDetails>();
@@ -122,9 +122,10 @@ str_t gen_module_function(semantics::Symbol const &fn, module_info_t const &m,
   if (sub.isFunction() && (rt == nullptr || !intrinsic_supported(*rt)))
     return "";
 
-  ++n;
-  fills += method_row("module_methods", n, strings.intern(pyname), wrapper,
-                      sub.dummyArgs().empty() ? "METH_NOARGS" : "METH_VARARGS");
+  if (fills != nullptr)
+    *fills +=
+        method_row("module_methods", ++n, strings.intern(pyname), wrapper,
+                   sub.dummyArgs().empty() ? "METH_NOARGS" : "METH_VARARGS");
 
   str_t body = decls + fetch;
   body += build_result(rt, fmt::format("{}({})", pyname, call_args));

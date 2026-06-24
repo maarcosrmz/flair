@@ -13,8 +13,6 @@
 
 namespace codegen {
 
-using namespace Fortran;
-
 // ===========================================================================
 // Templates (compiled in via C23 #embed; works at C++17 with clang).
 // ===========================================================================
@@ -40,26 +38,26 @@ static constexpr char tpl_method[] = {
     , '\0'};
 #pragma clang diagnostic pop
 
-std::vector<sym_ptr_t> public_fields(dtype_info_t const &dt) {
-  std::vector<sym_ptr_t> out;
-  for (sym_ptr_t c : flu::public_components(*dt.ptr)) {
-    auto const *t = c->GetType();
+sema::SymbolVector public_fields(dtype_info_t const &dt) {
+  sema::SymbolVector out;
+  for (auto const &sym : flu::public_components(*dt.ptr)) {
+    auto const *t = sym->GetType();
     if (t == nullptr || !intrinsic_supported(*t))
       continue; // intrinsic real/integer only for now
-    int const rank = flu::rank_of(*c);
+    int const rank = flu::rank_of(sym);
     if (rank == 0) {
-      out.push_back(c);
+      out.push_back(sym);
       continue;
     }
     // rank-1 arrays and allocatable/pointer for now
-    if (rank == 1 && (flu::is_allocatable(*c) || flu::is_pointer(*c)))
-      out.push_back(c);
+    if (rank == 1 && (flu::is_allocatable(sym) || flu::is_pointer(sym)))
+      out.push_back(sym);
   }
   return out;
 }
 
 str_t gen_object_struct(dtype_info_t const &dt) {
-  semantics::Symbol const &tsym = *dt.ptr;
+  sema::Symbol const &tsym = *dt.ptr;
   return render(tpl_struct, {{"struct", struct_name(tsym)},
                              {"ptr_field", ptr_field(tsym)},
                              {"tname", tname(tsym)}});
@@ -89,21 +87,21 @@ static str_t ctor_new_body(str_t const &pf) {
 
 // tp_init for ctor case: parses public scalar fields as kwargs, then calls the
 // pointer-returning constructor interface and stores the result.
-static str_t ctor_init_body(semantics::Symbol const &tsym,
-                            std::vector<sym_ptr_t> const &fields,
+static str_t ctor_init_body(sema::Symbol const &tsym,
+                            sema::SymbolVector const &fields,
                             string_pool_t &strings) {
-  std::vector<sym_ptr_t> scalars;
-  for (sym_ptr_t f : fields)
-    if (flu::rank_of(*f) == 0)
+  sema::SymbolVector scalars;
+  for (const sema::Symbol &f : fields)
+    if (flu::rank_of(f) == 0)
       scalars.push_back(f);
 
   str_t b;
   b += fmt::format("        type({}), pointer :: pt\n", struct_name(tsym));
   b += fmt::format("        type({}), pointer :: p\n", tname(tsym));
   b += "        type(c_ptr) :: arg\n";
-  for (sym_ptr_t f : scalars) {
-    str_t const nm = f->name().ToString();
-    b += fmt::format("        {} :: kw_{}\n", ftype(*f->GetType()), nm);
+  for (const sema::Symbol &f : scalars) {
+    str_t const nm = f.name().ToString();
+    b += fmt::format("        {} :: kw_{}\n", ftype(*f.GetType()), nm);
   }
   b += "\n";
 
@@ -111,22 +109,22 @@ static str_t ctor_init_body(semantics::Symbol const &tsym,
 
   if (!scalars.empty()) {
     b += "        if (c_associated(kwds)) then\n";
-    for (sym_ptr_t f : scalars) {
-      str_t const nm = f->name().ToString();
+    for (const sema::Symbol &f : scalars) {
+      str_t const nm = f.name().ToString();
       b += fmt::format(
           "            arg = PyDict_GetItemString(kwds, c_loc({}))\n",
           strings.intern(nm));
       b += fmt::format("            if (c_associated(arg)) kw_{} = {}\n", nm,
-                       from_py(*f->GetType(), "arg"));
+                       from_py(*f.GetType(), "arg"));
     }
     b += "        end if\n\n";
   }
 
   str_t ctor_args;
-  for (sym_ptr_t f : scalars) {
+  for (const sema::Symbol &f : scalars) {
     if (!ctor_args.empty())
       ctor_args += ", ";
-    str_t const nm = f->name().ToString();
+    str_t const nm = f.name().ToString();
     ctor_args += nm + "=kw_" + nm;
   }
   b += fmt::format("        p => {}({})\n", tname(tsym), ctor_args);
@@ -137,15 +135,15 @@ static str_t ctor_init_body(semantics::Symbol const &tsym,
 // tp_init for init case: skips the first dummy arg (the type itself), parses
 // the remaining intrinsic-typed dummies as kwargs, then calls the init
 // subroutine.
-static str_t init_init_body(semantics::Symbol const &tsym,
-                            fnt_info_t const &init_fi, string_pool_t &strings) {
-  auto const &sub = init_fi.ptr->get<semantics::SubprogramDetails>();
+static str_t init_init_body(sema::Symbol const &tsym, fnt_info_t const &init_fi,
+                            string_pool_t &strings) {
+  auto const &sub = init_fi.ptr->get<sema::SubprogramDetails>();
   auto const &all = sub.dummyArgs();
 
   // Collect supported dummies (skip first — it's the object being initialized).
-  std::vector<semantics::Symbol *> dummies;
+  std::vector<sema::Symbol *> dummies;
   bool first = true;
-  for (semantics::Symbol *d : all) {
+  for (sema::Symbol *d : all) {
     if (first) {
       first = false;
       continue;
@@ -161,7 +159,7 @@ static str_t init_init_body(semantics::Symbol const &tsym,
   b += fmt::format("        type({}), pointer :: pt\n", struct_name(tsym));
   b += fmt::format("        type({}), pointer :: p\n", tname(tsym));
   b += "        type(c_ptr) :: arg\n";
-  for (semantics::Symbol *d : dummies) {
+  for (sema::Symbol *d : dummies) {
     str_t const nm = d->name().ToString();
     b += fmt::format("        {} :: kw_{}\n", ftype(*d->GetType()), nm);
   }
@@ -172,7 +170,7 @@ static str_t init_init_body(semantics::Symbol const &tsym,
 
   if (!dummies.empty()) {
     b += "        if (c_associated(kwds)) then\n";
-    for (semantics::Symbol *d : dummies) {
+    for (sema::Symbol *d : dummies) {
       str_t const nm = d->name().ToString();
       b += fmt::format(
           "            arg = PyDict_GetItemString(kwds, c_loc({}))\n",
@@ -184,7 +182,7 @@ static str_t init_init_body(semantics::Symbol const &tsym,
   }
 
   str_t call_args;
-  for (semantics::Symbol *d : dummies) {
+  for (sema::Symbol *d : dummies) {
     if (!call_args.empty())
       call_args += ", ";
     str_t const nm = d->name().ToString();
@@ -197,10 +195,9 @@ static str_t init_init_body(semantics::Symbol const &tsym,
   return b;
 }
 
-str_t gen_lifecycle(dtype_info_t const &dt,
-                    std::vector<sym_ptr_t> const &fields,
+str_t gen_lifecycle(dtype_info_t const &dt, sema::SymbolVector const &fields,
                     string_pool_t &strings) {
-  semantics::Symbol const &tsym = *dt.ptr;
+  sema::Symbol const &tsym = *dt.ptr;
   str_t const tn = tname(tsym);
   str_t const pf = ptr_field(tsym);
 
@@ -228,26 +225,26 @@ str_t gen_lifecycle(dtype_info_t const &dt,
                                });
 }
 
-str_t gen_method(dtype_info_t const &dt, semantics::Symbol const &binding,
+str_t gen_method(dtype_info_t const &dt, sema::Symbol const &binding,
                  module_info_t const &m, string_pool_t &strings, str_t &fills,
                  int &n) {
-  semantics::Symbol const &tsym = *dt.ptr;
-  semantics::Symbol const *actual = flu::binding_actual(binding);
-  if (actual == nullptr || !actual->has<semantics::SubprogramDetails>())
+  sema::Symbol const &tsym = *dt.ptr;
+  sema::Symbol const *actual = flu::binding_actual(binding);
+  if (actual == nullptr || !actual->has<sema::SubprogramDetails>())
     return "";
-  auto const &sub = actual->get<semantics::SubprogramDetails>();
+  auto const &sub = actual->get<sema::SubprogramDetails>();
 
   str_t const tn = tname(tsym);
   str_t const pyname = binding.name().ToString();
   str_t const wrapper = fmt::format("py_{}_{}", tn, pyname);
 
-  std::vector<semantics::Symbol *> args = drop_self(sub.dummyArgs());
+  std::vector<sema::Symbol *> args = drop_self(sub.dummyArgs());
   str_t decls, fetch, call_args;
   if (!parse_args(args, m, "r = c_null_ptr", decls, fetch, call_args))
     return fmt::format("    ! TODO: unsupported argument(s): {}%{}\n\n", tn,
                        pyname);
 
-  semantics::DeclTypeSpec const *rt =
+  sema::DeclTypeSpec const *rt =
       sub.isFunction() ? sub.result().GetType() : nullptr;
   if (sub.isFunction() && (rt == nullptr || !intrinsic_supported(*rt)))
     return fmt::format("    ! TODO: unsupported result type: {}%{}\n\n", tn,
@@ -269,9 +266,9 @@ str_t gen_method(dtype_info_t const &dt, semantics::Symbol const &binding,
          "\n";
 }
 
-str_t gen_getset(dtype_info_t const &dt, semantics::Symbol const &comp,
+str_t gen_getset(dtype_info_t const &dt, sema::Symbol const &comp,
                  string_pool_t &strings, str_t &fills, int &n) {
-  semantics::Symbol const &tsym = *dt.ptr;
+  sema::Symbol const &tsym = *dt.ptr;
   str_t const tn = tname(tsym);
   str_t const field = comp.name().ToString();
   str_t const getter = fmt::format("py_{}_get_{}", tn, field);
