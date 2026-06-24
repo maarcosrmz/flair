@@ -3,12 +3,9 @@
 #include <flang/Semantics/scope.h>
 #include <flang/Semantics/symbol.h>
 
-#include "../wdata.hpp"
+#include "wdata.hpp"
 
 namespace sema = Fortran::semantics;
 
-namespace flair::semantics {
-
-void traverse_module(sema::Symbol const &mod_sym, module_info_t &mi);
-
-} // namespace flair::semantics
+void traverse_global_scope(sema::Scope const &global_scope,
+                           std::shared_ptr<wdata_t> wdata);

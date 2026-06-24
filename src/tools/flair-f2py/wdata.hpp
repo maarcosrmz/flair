@@ -51,8 +51,7 @@ struct module_info_t {
 };
 
 struct wdata_t {
-  frontend::CompilerInstance const *ci;
   std::vector<module_info_t> modules;
 
-  wdata_t(frontend::CompilerInstance *ci) : ci(ci) {};
+  explicit wdata_t() = default;
 };

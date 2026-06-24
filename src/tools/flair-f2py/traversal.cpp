@@ -5,38 +5,27 @@
 
 #include "traversal.hpp"
 
-namespace flair::semantics {
-
-// Returns a pointer to the derived type in module_info_t, which matches the
-// first argument of the initializer subroutine. Returns nullptr if there is no
-// match.
+// --- Forward declarations ---
 dtype_info_t *get_dtype_of_initializer(sema::Symbol const &sym,
-                                       module_info_t const &mi) {
-  auto const &subp = sym.get<sema::SubprogramDetails>();
-  std::vector<sema::Symbol *> const &args = subp.dummyArgs();
+                                       module_info_t const &mi);
+void traverse_module(sema::Symbol const &mod_sym, module_info_t &mi);
+// ----------------------------
 
-  if (args.empty() || args.front() == nullptr)
-    return nullptr;
+void traverse_global_scope(const sema::Scope &root,
+                           std::shared_ptr<wdata_t> wdata) {
+  for (auto const &[name, sym_ref] : root) {
+    sema::Symbol const &sym = sym_ref.get();
+    if (not sym.has<sema::ModuleDetails>())
+      continue;
+    // If the origin of the module is a .mod file, skip it.
+    // Avoids transitive traversal of USEd modules.
+    if (sym.test(sema::Symbol::Flag::ModFile))
+      continue;
 
-  sema::DeclTypeSpec const *type = args.front()->GetType();
-  if (type == nullptr)
-    return nullptr;
-
-  sema::DerivedTypeSpec const *dts = type->AsDerived();
-  if (dts == nullptr)
-    return nullptr;
-
-  std::string const nm = sym.name().ToString();
-  bool const is_init = not subp.isFunction() and nm.size() >= 5 and
-                       nm.compare(nm.size() - 5, 5, "_init") == 0;
-  if (not is_init)
-    return nullptr;
-
-  if (const auto &it = mi.derived_types.find(dts->name().ToString());
-      it != mi.derived_types.end())
-    return const_cast<dtype_info_t *>(&it->second);
-
-  return nullptr;
+    module_info_t mi(name.ToString());
+    traverse_module(sym, mi);
+    wdata->modules.push_back(std::move(mi));
+  }
 }
 
 void traverse_module(sema::Symbol const &mod_sym, module_info_t &mi) {
@@ -67,11 +56,13 @@ void traverse_module(sema::Symbol const &mod_sym, module_info_t &mi) {
     if (not sym.has<sema::GenericDetails>())
       return;
 
+    fnt_info_t fi{&sym, false, nullptr};
     if (auto const &it = mi.derived_types.find(sym.name().ToString());
         it != mi.derived_types.end()) {
       // We have found an interface with the same name as a previously
       // matched derived type => interface-as-constructor pattern match
-      it->second.ctor = fnt_info_t{&sym, false, nullptr};
+      it->second.ctor = std::move(fi);
+      return;
     }
 
     // TODO: match other (procedure) interfaces
@@ -132,4 +123,34 @@ void traverse_module(sema::Symbol const &mod_sym, module_info_t &mi) {
   llvm::for_each(filtered_symbols, match_subprogram);
 }
 
-} // namespace flair::semantics
+// Returns a pointer to the already matched derived type in module_info_t,
+// which matches the first argument of the initializer subroutine.
+// Returns nullptr if there is no match.
+dtype_info_t *get_dtype_of_initializer(sema::Symbol const &sym,
+                                       module_info_t const &mi) {
+  auto const &subp = sym.get<sema::SubprogramDetails>();
+  std::vector<sema::Symbol *> const &args = subp.dummyArgs();
+
+  if (args.empty() || args.front() == nullptr)
+    return nullptr;
+
+  sema::DeclTypeSpec const *type = args.front()->GetType();
+  if (type == nullptr)
+    return nullptr;
+
+  sema::DerivedTypeSpec const *dts = type->AsDerived();
+  if (dts == nullptr)
+    return nullptr;
+
+  std::string const nm = sym.name().ToString();
+  bool const is_init = not subp.isFunction() and nm.size() >= 5 and
+                       nm.compare(nm.size() - 5, 5, "_init") == 0;
+  if (not is_init)
+    return nullptr;
+
+  if (const auto &it = mi.derived_types.find(dts->name().ToString());
+      it != mi.derived_types.end())
+    return const_cast<dtype_info_t *>(&it->second);
+
+  return nullptr;
+}
