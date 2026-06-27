@@ -239,8 +239,8 @@ str_t gen_method(dtype_info_t const &dt, sema::Symbol const &binding,
   str_t const wrapper = fmt::format("py_{}_{}", tn, pyname);
 
   std::vector<sema::Symbol *> args = drop_self(sub.dummyArgs());
-  str_t decls, fetch, call_args;
-  if (!parse_args(args, m, "r = c_null_ptr", decls, fetch, call_args))
+  str_t decls, fetch, call_args, cleanup;
+  if (!parse_args(args, m, "r = c_null_ptr", decls, fetch, call_args, &cleanup))
     return fmt::format("    ! TODO: unsupported argument(s): {}%{}\n\n", tn,
                        pyname);
 
@@ -259,6 +259,7 @@ str_t gen_method(dtype_info_t const &dt, sema::Symbol const &binding,
   body += fmt::format("        call c_f_pointer(pt%{}, p)\n", ptr_field(tsym));
   body += fetch;
   body += build_result(rt, fmt::format("p%{}({})", pyname, call_args));
+  body += cleanup;
   return render(tpl_method, {{"fn", wrapper},
                              {"struct", struct_name(tsym)},
                              {"tname", tn},

@@ -10,6 +10,7 @@
 #include "dtypes.hpp"
 #include "flu/symbols.hpp"
 #include "functions.hpp"
+#include "interfaces.hpp"
 #include "utils.hpp"
 
 namespace codegen {
@@ -96,6 +97,16 @@ str_t codegen_module(module_info_t const &m) {
     pyinit_creates += create_fills(tn, cls, strings);
   }
 
+  // Interface specifics are exposed only through their generic's dispatcher, so
+  // exclude them from the standalone module-function loop (a public specific
+  // would otherwise be wrapped twice -> duplicate definition).
+  for (auto const &iface : m.interfaces) {
+    if (iface.ptr == nullptr)
+      continue;
+    for (auto const &proc : flu::get_specific_procs(*iface.ptr))
+      bound.insert(&static_cast<semantics::Symbol const &>(proc));
+  }
+
   // ---- module-level functions (excluding type-bound actuals) ---------------
   str_t modfn_fills;
   int nmod = 0;
@@ -108,10 +119,26 @@ str_t codegen_module(module_info_t const &m) {
     if (iface.ptr == nullptr /* TODO: or bound to dtype (?) */)
       continue;
 
+    // Generate the specific-procedure wrappers (internal helpers, not exposed),
+    // remembering which actually generated so the interface wrapper only
+    // dispatches to reachable ones. Each calls the public generic name so that
+    // resolution picks the specific from the typed actuals even when the
+    // specific itself is private.
+    str_t const gname = iface.ptr->name().ToString();
     sema::SymbolVector specific_procs = flu::get_specific_procs(*iface.ptr);
+    std::vector<semantics::Symbol const *> generated;
     for (auto const &proc : specific_procs) {
-      procedures += gen_module_function(proc, m, strings, nullptr, nmod);
+      semantics::Symbol const &ps = proc;
+      str_t const w = gen_module_function(ps, m, strings, nullptr, nmod, gname);
+      if (!w.empty()) {
+        procedures += w;
+        generated.push_back(&ps);
+      }
     }
+    // ...then the dispatching wrapper exposed under the generic's name.
+    procedures +=
+        gen_interface_wrapper(*iface.ptr, generated, m, strings, &modfn_fills,
+                              nmod);
   }
   modfn_fills += method_sentinel("module_methods", nmod + 1);
 

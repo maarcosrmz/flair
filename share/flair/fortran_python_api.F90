@@ -52,6 +52,7 @@ module python_api_mod
 
     ! Array flags
     integer(c_int), parameter :: NPY_ARRAY_C_CONTIGUOUS = 1     ! 0x001
+    integer(c_int), parameter :: NPY_ARRAY_F_CONTIGUOUS = 2     ! 0x002
     integer(c_int), parameter :: NPY_ARRAY_OWNDATA      = 4     ! 0x004
     integer(c_int), parameter :: NPY_ARRAY_WRITEABLE    = 1024  ! 0x400
     integer(c_int), parameter :: NPY_ARRAY_ALIGNED      = 256   ! 0x100
@@ -132,6 +133,22 @@ module python_api_mod
         type(c_ptr)       :: mem_handler   ! NPY_FEATURE_VERSION >= 1.22
     end type
 
+    ! Minimal mirror of an arbitrary received object's PyObject header, used to
+    ! reach its type at runtime. On 64-bit CPython: ob_refcnt@0(8), ob_type@8(8).
+    type, bind(C) :: PyObject_t
+        integer(c_ptrdiff_t) :: ob_refcnt
+        type(c_ptr)          :: ob_type    ! PyTypeObject*
+    end type
+
+    ! Partial mirror of PyTypeObject up to tp_name. PyObject_VAR_HEAD is
+    ! ob_refcnt@0(8) + ob_type@8(8) + ob_size@16(8); tp_name@24(8).
+    type, bind(C) :: PyTypeObject_t
+        integer(c_ptrdiff_t) :: ob_refcnt
+        type(c_ptr)          :: ob_type    ! metatype
+        integer(c_ptrdiff_t) :: ob_size
+        type(c_ptr)          :: tp_name    ! const char* -- "<module>.<name>"
+    end type
+
     ! ===== Exception objects (exported symbols from the interpreter) =====
     type(c_ptr), bind(C, name="PyExc_TypeError")      :: PyExc_TypeError
     type(c_ptr), bind(C, name="PyExc_ValueError")     :: PyExc_ValueError
@@ -193,6 +210,19 @@ module python_api_mod
             integer(c_ptrdiff_t) :: r
         end function
 
+        function PyTuple_New(len) bind(C, name="PyTuple_New") result(r)
+            import :: c_ptr, c_ptrdiff_t
+            integer(c_ptrdiff_t), value :: len
+            type(c_ptr) :: r
+        end function
+
+        function PyTuple_SetItem(op, i, newitem) bind(C, name="PyTuple_SetItem") result(r)
+            import :: c_ptr, c_ptrdiff_t, c_int
+            type(c_ptr),          value :: op, newitem
+            integer(c_ptrdiff_t), value :: i
+            integer(c_int) :: r   ! steals reference to newitem; 0 on success
+        end function
+
         ! --- list ---
         function PyList_New(len) bind(C, name="PyList_New") result(r)
             import :: c_ptr, c_ptrdiff_t
@@ -206,6 +236,22 @@ module python_api_mod
             integer(c_ptrdiff_t), value :: i
             type(c_ptr),          value :: item
             integer(c_int) :: r
+        end function
+
+        ! --- unicode (for character(len=*) arguments) ---
+        function PyUnicode_AsUTF8AndSize(obj, size) &
+                bind(C, name="PyUnicode_AsUTF8AndSize") result(r)
+            import :: c_ptr, c_ptrdiff_t
+            type(c_ptr),          value    :: obj
+            integer(c_ptrdiff_t), intent(out) :: size
+            type(c_ptr) :: r   ! const char* into the object; NULL on error
+        end function
+
+        function PyUnicode_FromString(str) &
+                bind(C, name="PyUnicode_FromString") result(r)
+            import :: c_ptr
+            type(c_ptr), value :: str   ! null-terminated UTF-8 C string
+            type(c_ptr) :: r
         end function
 
         ! --- dict ---
@@ -552,6 +598,50 @@ contains
         call c_f_pointer(arr, f)
         call c_f_pointer(f%strides, strd, [int(f%nd, c_ptrdiff_t)])
         r = strd(istride + 1)
+    end function
+
+    ! Number of dimensions of an ndarray (PyArray_NDIM macro).
+    function PyArray_NDIM(arr) result(r)
+        type(c_ptr), value :: arr
+        integer(c_int) :: r
+        type(PyArrayObject_fields_t), pointer :: f
+        call c_f_pointer(arr, f)
+        r = f%nd
+    end function
+
+    ! The dtype descriptor of an ndarray (PyArray_DESCR macro). Builtin dtypes
+    ! are singletons, so this can be pointer-compared against
+    ! PyArray_DescrFromType(<code>) to identify the element type.
+    function PyArray_DESCR(arr) result(r)
+        type(c_ptr), value :: arr
+        type(c_ptr) :: r
+        type(PyArrayObject_fields_t), pointer :: f
+        call c_f_pointer(arr, f)
+        r = f%descr
+    end function
+
+    ! .true. iff the null-terminated C string `cs` equals the Fortran string
+    ! `fs` exactly (same length, byte-for-byte). Used for tp_name dispatch.
+    function c_string_eq(cs, fs) result(eq)
+        type(c_ptr),      value      :: cs
+        character(len=*), intent(in) :: fs
+        logical :: eq
+        character(kind=c_char), pointer :: p(:)
+        integer :: i
+        eq = .false.
+        if (.not. c_associated(cs)) return
+        call c_f_pointer(cs, p, [len(fs) + 1])
+        do i = 1, len(fs)
+            if (iachar(p(i)) /= iachar(fs(i:i))) return
+        end do
+        eq = (p(len(fs) + 1) == c_null_char)
+    end function
+
+    ! .true. iff two C pointers refer to the same address.
+    function c_ptr_eq(a, b) result(eq)
+        type(c_ptr), value :: a, b
+        logical :: eq
+        eq = transfer(a, 0_c_intptr_t) == transfer(b, 0_c_intptr_t)
     end function
 
 end module python_api_mod
