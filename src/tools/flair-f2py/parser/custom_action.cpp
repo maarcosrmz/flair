@@ -12,6 +12,7 @@
 #include "../codegen/codegen.hpp"
 #include "../traversal.hpp"
 #include "custom_action.hpp"
+#include "flu/diagnostics.hpp"
 
 // Forward declaration
 namespace Fortran::semantics {
@@ -33,7 +34,7 @@ void custom_action::executeAction() {
 
   std::optional<Fortran::parser::Program> &ParseTree{
       Ci.getParsing().parseTree()};
-  assert(ParseTree && "Cannot run semantic checks without a parse tree!");
+  assert(ParseTree && "Cannot populate global scope without a parse tree!");
 
   auto &SemanticsCtx{Ci.createNewSemanticsContext()};
 
@@ -55,6 +56,12 @@ void custom_action::executeAction() {
     std::ofstream(outfile) << codegen::codegen_module(mi);
     std::cout << "Generated " << outfile << std::endl;
   }
+
+  // TODO: Generation should fail if unsupported arguments are detected.
+  // Method must be explicitly ignored with compiler directive !FLAIR_IGNORE
+
+  // Flush any diagnostics queued during codegen (e.g. unsupported arguments).
+  flu::flush_messages(SemanticsCtx, Ci.getSemaOutputStream());
 }
 
 } // namespace flair::parser

@@ -57,6 +57,7 @@ module python_api_mod
     integer(c_int), parameter :: NPY_ARRAY_WRITEABLE    = 1024  ! 0x400
     integer(c_int), parameter :: NPY_ARRAY_ALIGNED      = 256   ! 0x100
     integer(c_int), parameter :: NPY_ARRAY_ENSURECOPY   = 32    ! 0x020
+    integer(c_int), parameter :: NPY_ARRAY_WRITEBACKIFCOPY = 8192 ! 0x2000
     integer(c_int), parameter :: NPY_ARRAY_BEHAVED      = NPY_ARRAY_WRITEABLE + NPY_ARRAY_ALIGNED
 
     ! ===== C API struct mirrors =====
@@ -453,6 +454,15 @@ module python_api_mod
             integer(c_int), value :: min_depth, max_depth, requirements
             type(c_ptr) :: r
         end function
+
+        ! PyArray_ResolveWritebackIfCopy: flush a WRITEBACKIFCOPY copy back into
+        ! its base and clear the flag; returns 1 if copied back, 0 if nothing to
+        ! do, -1 on error.
+        function PyArray_ResolveWritebackIfCopy_iface(arr) bind(C) result(r)
+            import :: c_ptr, c_int
+            type(c_ptr), value :: arr
+            integer(c_int) :: r
+        end function
     end interface
 
     ! ===== NumPy API runtime state =====
@@ -466,6 +476,7 @@ module python_api_mod
     procedure(PyArray_DescrFromType_iface),       pointer :: PyArray_DescrFromType
     procedure(PyArray_SetBaseObject_iface),       pointer :: PyArray_SetBaseObject
     procedure(PyArray_FromAny_iface),             pointer :: PyArray_FromAny
+    procedure(PyArray_ResolveWritebackIfCopy_iface), pointer :: PyArray_ResolveWritebackIfCopy
 
 contains
 
@@ -484,6 +495,7 @@ contains
         type(c_funptr), save :: fp_PyArray_DescrFromType      = c_null_funptr
         type(c_funptr), save :: fp_PyArray_SetBaseObject      = c_null_funptr
         type(c_funptr), save :: fp_PyArray_FromAny            = c_null_funptr
+        type(c_funptr), save :: fp_PyArray_ResolveWritebackIfCopy = c_null_funptr
         character(kind=c_char, len=512), save, target :: err_msg
 
         r = -1_c_int
@@ -524,6 +536,7 @@ contains
         fp_PyArray_NewFromDescr              = transfer(api(95),  c_null_funptr)  ! C index 94
         fp_PyArray_GetNDArrayCFeatureVersion = transfer(api(212), c_null_funptr); ! C index 211
         fp_PyArray_SetBaseObject             = transfer(api(283), c_null_funptr)  ! C index 282
+        fp_PyArray_ResolveWritebackIfCopy    = transfer(api(303), c_null_funptr)  ! C index 302
 
         call c_f_procpointer(fp_PyArray_GetNDArrayCVersion, PyArray_GetNDArrayCVersion)
         call c_f_procpointer(fp_PyArray_DescrFromType,      PyArray_DescrFromType)
@@ -531,6 +544,7 @@ contains
         call c_f_procpointer(fp_PyArray_NewFromDescr,       PyArray_NewFromDescr)
         call c_f_procpointer(fp_PyArray_GetNDArrayCFeatureVersion, PyArray_GetNDArrayCFeatureVersion)
         call c_f_procpointer(fp_PyArray_SetBaseObject,      PyArray_SetBaseObject)
+        call c_f_procpointer(fp_PyArray_ResolveWritebackIfCopy, PyArray_ResolveWritebackIfCopy)
 
         ! Perform runtime check of C API version.  As of now NumPy 2.0 is ABI
         ! backwards compatible (in the exposed feature subset!) for all practical

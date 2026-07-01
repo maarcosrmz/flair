@@ -18,8 +18,11 @@ namespace codegen {
 // `decls`, fetch/convert statements into `fetch`, and the Fortran actuals into
 // `call_args`. Post-call cleanup (e.g. Py_DecRef of coerced numpy arrays) is
 // emitted into `cleanup` when non-null. Supports intrinsic scalar inputs,
-// intent(in) intrinsic arrays, and wrapped derived-type inputs; returns false
-// (procedure skipped) for anything else. Shared with method codegen.
+// intent(in) intrinsic arrays, intent(out)/intent(inout) intrinsic arrays (with
+// write-back), and wrapped derived-type inputs; returns false (procedure
+// skipped) for anything else. An intent(out)/intent(inout) intrinsic scalar
+// cannot be written back and emits an error via `ctx`. Shared with method
+// codegen.
 bool parse_args(std::vector<Fortran::semantics::Symbol *> const &dummies,
                 module_info_t const &m, str_t const &fail_return, str_t &decls,
                 str_t &fetch, str_t &call_args, str_t *cleanup = nullptr);

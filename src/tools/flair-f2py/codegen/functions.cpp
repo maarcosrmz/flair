@@ -7,6 +7,7 @@
 #include <flang/Semantics/symbol.h>
 #include <flang/Semantics/type.h>
 
+#include "flu/diagnostics.hpp"
 #include "flu/symbols.hpp"
 #include "flu/types.hpp"
 #include "pytypes.hpp"
@@ -70,15 +71,31 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
                            ptr_field(*wt), val);
       add_actual(val);
     } else if (flu::rank_of(*d) == 0 && intrinsic_supported(*t)) {
+      // A primitive scalar is passed by value; an out/inout write cannot be
+      // reflected back into the (immutable) Python object, so reject it.
+      if (d->attrs().test(semantics::Attr::INTENT_OUT) ||
+          d->attrs().test(semantics::Attr::INTENT_INOUT)) {
+        flu::emit_error(
+            *d,
+            "flair-f2py: cannot wrap scalar argument '" + d->name().ToString() +
+                "' with intent(out)/intent(inout): primitive scalars are "
+                "passed by value and cannot be written back; procedure "
+                "skipped");
+        return false;
+      }
       add_actual(from_py(*t, obj));
     } else if (int const rr = flu::rank_of(*d);
                rr > 0 && intrinsic_supported(*t)) {
-      // intent(in) intrinsic array: coerce to an F-contiguous numpy array of
-      // the exact dtype and point a Fortran array at its data. out/inout would
-      // need write-back, which is not handled yet.
-      if (d->attrs().test(semantics::Attr::INTENT_OUT) ||
-          d->attrs().test(semantics::Attr::INTENT_INOUT))
-        return false;
+      // Intrinsic array: coerce to an F-contiguous numpy array of the exact
+      // dtype and point a Fortran array at its data. For intent(out)/inout the
+      // WRITEBACKIFCOPY flag arranges any coercion copy to be flushed back into
+      // the caller's array via PyArray_ResolveWritebackIfCopy in cleanup (a
+      // no-op when no copy was made, i.e. the zero-copy fast path).
+      bool const writeback = d->attrs().test(semantics::Attr::INTENT_OUT) ||
+                             d->attrs().test(semantics::Attr::INTENT_INOUT);
+      str_t const reqs = writeback
+                             ? "NPY_ARRAY_F_CONTIGUOUS + NPY_ARRAY_WRITEBACKIFCOPY"
+                             : "NPY_ARRAY_F_CONTIGUOUS";
       str_t const arr = fmt::format("arr{}", i);
       str_t const val = fmt::format("v{}", i);
       str_t const shp = fmt::format("shp{}", i);
@@ -89,10 +106,12 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
       decls += fmt::format("        {}, pointer :: {}({})\n", ftype(*t), val,
                            colons);
       decls += fmt::format("        integer(c_ptrdiff_t) :: {}({})\n", shp, rr);
+      if (writeback)
+        decls += fmt::format("        integer(c_int) :: wb{}\n", i);
       fetch += fmt::format(
           "        {} = PyArray_FromAny({}, PyArray_DescrFromType({}), "
-          "{}_c_int, {}_c_int, NPY_ARRAY_F_CONTIGUOUS, c_null_ptr)\n",
-          arr, obj, npy(*t), rr, rr);
+          "{}_c_int, {}_c_int, {}, c_null_ptr)\n",
+          arr, obj, npy(*t), rr, rr, reqs);
       fetch += fmt::format("        if (.not. c_associated({})) then\n         "
                            "   {}\n            return\n        end if\n",
                            arr, fail_return);
@@ -101,8 +120,15 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
                              k + 1, arr, k);
       fetch += fmt::format("        call c_f_pointer(PyArray_DATA({}), {}, {})\n",
                            arr, val, shp);
-      if (cleanup != nullptr)
+      if (cleanup != nullptr) {
+        // Resolve before decref: an unresolved writeback array warns and drops
+        // the write on decref.
+        if (writeback)
+          *cleanup +=
+              fmt::format("        wb{0} = PyArray_ResolveWritebackIfCopy({1})\n",
+                          i, arr);
         *cleanup += fmt::format("        call Py_DecRef({})\n", arr);
+      }
       add_actual(val);
     } else {
       return false;
