@@ -1,11 +1,11 @@
 #pragma once
-#include "../wdata.hpp"
+
 #include "flang/Frontend/FrontendActions.h"
 
-namespace flair::parser {
+#include "wdata.hpp"
 
 // ---------------------------------------------------------------------
-// parser::custom_action: FrontendAction that is executed after parsing
+// custom_action: FrontendAction that is executed after parsing
 // and drives the full binding-generation pipeline.
 //
 // executeAction() traverses the global semantics scope while filling wdata,
@@ -25,5 +25,3 @@ private:
   void traverseSemantics();
   void codegen();
 };
-
-} // namespace flair::parser

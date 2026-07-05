@@ -1,22 +1,22 @@
-#include <flang/Frontend/CompilerInstance.h>
-#include <flang/Parser/char-block.h>
-#include <flang/Parser/parse-tree-visitor.h>
-#include <flang/Parser/parse-tree.h>
-#include <flang/Parser/parsing.h>
-#include <flang/Semantics/semantics.h>
-#include <flang/Support/Fortran-features.h>
 #include <fstream>
 #include <iostream>
-#include <llvm/ADT/STLExtras.h>
 #include <optional>
 
-#include "../codegen/codegen.hpp"
-#include "../traversal.hpp"
-#include "custom_action.hpp"
-#include "flu/diagnostics.hpp"
-#include "tools/flair-f2py/parser/directive_collector.hpp"
+#include "flang/Frontend/CompilerInstance.h"
+#include "flang/Parser/parse-tree-visitor.h"
+#include "flang/Parser/parse-tree.h"
+#include "flang/Parser/parsing.h"
+#include "flang/Semantics/semantics.h"
+#include "flang/Support/Fortran-features.h"
 
-namespace sema  = Fortran::semantics;
+#include "codegen/codegen.hpp"
+#include "custom_action.hpp"
+#include "directive_collector.hpp"
+#include "flu/diagnostics.hpp"
+#include "traversal.hpp"
+
+using namespace codegen;
+namespace sema = Fortran::semantics;
 namespace parse = Fortran::parser;
 
 // Forward declaration
@@ -25,8 +25,6 @@ namespace Fortran::semantics {
 bool ResolveNames(SemanticsContext &, const parser::Program &, Scope &top);
 
 } // namespace Fortran::semantics
-
-namespace flair::parser {
 
 bool custom_action::initSemantics() {
   Fortran::frontend::CompilerInstance &Ci = getInstance();
@@ -72,11 +70,10 @@ void custom_action::traverseSemantics() {
 void custom_action::codegen() {
   // Codegen: one py_<module>.F90 wrapper per module with wrappable entities.
   for (auto const &mi : wdata->modules) {
-    if (not codegen::has_wrappable(mi))
+    if (not has_wrappable(mi))
       continue;
-    std::string const outfile =
-        "py_" + codegen::module_pyname(mi.name) + ".F90";
-    std::ofstream(outfile) << codegen::codegen_module(mi);
+    std::string const outfile = "py_" + module_pyname(mi.name) + ".F90";
+    std::ofstream(outfile) << codegen_module(mi);
     std::cout << "Generated " << outfile << std::endl;
   }
 
@@ -92,5 +89,3 @@ void custom_action::executeAction() {
     codegen();
   }
 }
-
-} // namespace flair::parser

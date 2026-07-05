@@ -1,9 +1,6 @@
 #pragma once
 
-#include <string>
-#include <vector>
-
-#include <flang/Semantics/symbol.h>
+#include "flang/Semantics/symbol.h"
 
 #include "../wdata.hpp"
 #include "utils.hpp"

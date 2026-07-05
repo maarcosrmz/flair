@@ -5,7 +5,7 @@
 #include <fmt/core.h>
 #include <fmt/format.h>
 
-#include <flang/Semantics/symbol.h>
+#include "flang/Semantics/symbol.h"
 
 #include "dtypes.hpp"
 #include "flu/symbols.hpp"

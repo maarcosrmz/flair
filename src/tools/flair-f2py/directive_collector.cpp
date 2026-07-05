@@ -1,9 +1,7 @@
+#include "flang/Parser/parse-tree.h"
+
 #include "directive_collector.hpp"
 #include "flu/diagnostics.hpp"
-#include <flang/Parser/parse-tree.h>
-#include <llvm/Support/ErrorHandling.h>
-
-namespace flair::parser {
 
 bool directive_collector::Pre(const parse::CompilerDirective &cd) {
   const std::string &dir = directive_sentinel(cd.source);
@@ -77,5 +75,3 @@ directive_collector::directive_sentinel(const parse::CharBlock &body) {
       return dollar ? std::string(q + 1, dollar - q) : std::string{};
   }
 }
-
-} // namespace flair::parser

@@ -1,7 +1,6 @@
 #pragma once
-#include <flang/Semantics/attr.h>
-#include <flang/Semantics/scope.h>
-#include <flang/Semantics/symbol.h>
+#include "flang/Semantics/scope.h"
+#include "flang/Semantics/symbol.h"
 
 #include "wdata.hpp"
 

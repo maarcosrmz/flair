@@ -1,7 +1,7 @@
 #pragma once
 #include "flang/Semantics/symbol.h"
 
-#include "parser/directive_collector.hpp"
+#include "directive_collector.hpp"
 
 using namespace Fortran;
 
@@ -58,7 +58,7 @@ struct module_info_t {
 
 struct wdata_t {
   std::vector<module_info_t> modules;
-  std::unique_ptr<flair::parser::directive_collector> collector;
+  std::unique_ptr<directive_collector> collector;
 
   explicit wdata_t() = default;
 };

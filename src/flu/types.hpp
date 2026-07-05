@@ -3,7 +3,7 @@
 #include <optional>
 #include <string>
 
-#include <flang/Common/Fortran-consts.h>
+#include "flang/Common/Fortran-consts.h"
 
 namespace Fortran::semantics {
 class DeclTypeSpec;

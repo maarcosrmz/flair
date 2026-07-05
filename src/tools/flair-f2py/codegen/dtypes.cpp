@@ -3,8 +3,8 @@
 #include <fmt/core.h>
 #include <fmt/format.h>
 
-#include <flang/Semantics/symbol.h>
-#include <flang/Semantics/type.h>
+#include "flang/Semantics/symbol.h"
+#include "flang/Semantics/type.h"
 
 #include "flu/diagnostics.hpp"
 #include "flu/symbols.hpp"

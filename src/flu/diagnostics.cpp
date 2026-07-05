@@ -1,9 +1,9 @@
 #include "flu/diagnostics.hpp"
 
-#include <flang/Parser/char-block.h>
-#include <flang/Parser/message.h>
-#include <flang/Semantics/semantics.h>
-#include <flang/Semantics/symbol.h>
+#include "flang/Parser/char-block.h"
+#include "flang/Parser/message.h"
+#include "flang/Semantics/semantics.h"
+#include "flang/Semantics/symbol.h"
 
 namespace flu {
 

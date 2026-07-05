@@ -1,7 +1,8 @@
 #pragma once
 
-#include <flang/Common/reference.h>
 #include <vector>
+
+#include "flang/Common/reference.h"
 
 namespace Fortran::semantics {
 class Symbol;

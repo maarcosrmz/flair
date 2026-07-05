@@ -1,5 +1,3 @@
-#include <flang/Frontend/FrontendActions.h>
-#include <flang/Parser/options.h>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -7,27 +5,18 @@
 #include "flang/Frontend/CompilerInstance.h"
 #include "flang/Frontend/FrontendAction.h"
 #include "flang/Frontend/TextDiagnosticBuffer.h"
-#include "flang/Parser/parsing.h"
+#include "flang/Parser/options.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/DiagnosticOptions.h"
 #include "llvm/Support/TargetSelect.h"
 
-#include "parser/custom_action.hpp"
-#include "semantics/custom_action.hpp"
-#include "tools/flair-f2py/parser/directive_collector.hpp"
+#include "custom_action.hpp"
 
 //====================   main    ==========================================
 
 int main(int argc, const char **argv) try {
 
   // TODO: CMD line options, compilation database, logger, etc.
-
-  bool with_sema = false;
-  if (argc > 1) {
-    std::string arg = argv[1];
-    if (arg == "-s")
-      with_sema = true;
-  }
 
   // ------- main tool
 
@@ -47,8 +36,7 @@ int main(int argc, const char **argv) try {
 
   llvm::SmallVector<const char *, 256> args(argv, argv + argc);
   bool success = Fortran::frontend::CompilerInvocation::createFromArgs(
-      flang->getInvocation(), llvm::ArrayRef(args).slice(with_sema ? 2 : 1),
-      diags, args[0]);
+      flang->getInvocation(), llvm::ArrayRef(args).slice(1), diags, args[0]);
   if (!success)
     throw std::runtime_error("Failed creating compiler invocation.");
 
@@ -62,14 +50,9 @@ int main(int argc, const char **argv) try {
       flang->getInvocation().getFortranOpts();
   fortran_opts.compilerDirectiveSentinels.push_back(FLAIR_DIRECTIVE);
 
-  std::unique_ptr<Fortran::frontend::FrontendAction> act;
-  if (with_sema)
-    act = std::make_unique<flair::semantics::custom_action>();
-  else
-    act = std::make_unique<flair::parser::custom_action>();
-
+  auto act = std::make_unique<custom_action>();
   success = flang->executeAction(*act);
-  flang->clearOutputFiles(false);
+  flang->clearOutputFiles(true);
 
   if (!success)
     throw std::runtime_error("Failed to run custom_action.");

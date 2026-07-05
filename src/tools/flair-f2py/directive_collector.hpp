@@ -1,13 +1,12 @@
 #pragma once
-#include <flang/Parser/parse-tree.h>
-#include <flang/Semantics/semantics.h>
+
+#include "flang/Parser/parse-tree.h"
+#include "flang/Semantics/semantics.h"
 
 #define FLAIR_DIRECTIVE "flair$"
 
 namespace sema = Fortran::semantics;
 namespace parse = Fortran::parser;
-
-namespace flair::parser {
 
 struct directive_collector {
 public:
@@ -48,5 +47,3 @@ public:
 private:
   static std::string directive_sentinel(const parse::CharBlock &body);
 };
-
-} // namespace flair::parser
