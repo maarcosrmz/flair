@@ -1,3 +1,5 @@
+#include <flang/Frontend/FrontendActions.h>
+#include <flang/Parser/options.h>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -5,12 +7,14 @@
 #include "flang/Frontend/CompilerInstance.h"
 #include "flang/Frontend/FrontendAction.h"
 #include "flang/Frontend/TextDiagnosticBuffer.h"
+#include "flang/Parser/parsing.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/DiagnosticOptions.h"
 #include "llvm/Support/TargetSelect.h"
 
 #include "parser/custom_action.hpp"
 #include "semantics/custom_action.hpp"
+#include "tools/flair-f2py/parser/directive_collector.hpp"
 
 //====================   main    ==========================================
 
@@ -48,26 +52,15 @@ int main(int argc, const char **argv) try {
   if (!success)
     throw std::runtime_error("Failed creating compiler invocation.");
 
-  // Workaround for flang 22.1.5 bugs in intrinsic module dir handling:
-  // 1. -fintrinsic-modules-path dirs are only added to searchDirectories, not
-  //    intrinsicModuleDirectories (use,intrinsic:: uses the latter).
-  // 2. Default intrinsic dir is derived from /proc/self/exe (flair-f2py), not
-  // args[0].
-  {
-    auto &ppOpts = flang->getInvocation().getPreprocessorOpts();
-    auto &fortranOpts = flang->getInvocation().getFortranOpts();
-    for (auto const &dir : ppOpts.searchDirectoriesFromIntrModPath)
-      fortranOpts.intrinsicModuleDirectories.emplace_back(dir);
-    llvm::SmallString<128> defaultIntrDir("/usr/include/flang");
-    fortranOpts.intrinsicModuleDirectories.emplace_back(
-        std::string(defaultIntrDir));
-  }
-
   llvm::InitializeAllTargets();
   llvm::InitializeAllTargetMCs();
   llvm::InitializeAllAsmPrinters();
 
   diagsBuffer->flushDiagnostics(flang->getDiagnostics());
+
+  Fortran::parser::Options &fortran_opts =
+      flang->getInvocation().getFortranOpts();
+  fortran_opts.compilerDirectiveSentinels.push_back(FLAIR_DIRECTIVE);
 
   std::unique_ptr<Fortran::frontend::FrontendAction> act;
   if (with_sema)

@@ -4,6 +4,7 @@
 #include <flang/Parser/parse-tree.h>
 #include <flang/Parser/parsing.h>
 #include <flang/Semantics/semantics.h>
+#include <flang/Support/Fortran-features.h>
 #include <fstream>
 #include <iostream>
 #include <llvm/ADT/STLExtras.h>
@@ -13,6 +14,10 @@
 #include "../traversal.hpp"
 #include "custom_action.hpp"
 #include "flu/diagnostics.hpp"
+#include "tools/flair-f2py/parser/directive_collector.hpp"
+
+namespace sema  = Fortran::semantics;
+namespace parse = Fortran::parser;
 
 // Forward declaration
 namespace Fortran::semantics {
@@ -21,32 +26,51 @@ bool ResolveNames(SemanticsContext &, const parser::Program &, Scope &top);
 
 } // namespace Fortran::semantics
 
-namespace sema = Fortran::semantics;
-
 namespace flair::parser {
 
-void custom_action::executeAction() {
+bool custom_action::initSemantics() {
   Fortran::frontend::CompilerInstance &Ci = getInstance();
 
   // If error after parsing, exit immediately
   if (Ci.getDiagnostics().hasErrorOccurred())
-    return;
+    return false;
 
-  std::optional<Fortran::parser::Program> &ParseTree{
-      Ci.getParsing().parseTree()};
+  const std::optional<parse::Program> &ParseTree{Ci.getParsing().parseTree()};
   assert(ParseTree && "Cannot populate global scope without a parse tree!");
 
   auto &SemanticsCtx{Ci.createNewSemanticsContext()};
+
+  // Disable compiler warnings about ignored compiler directives.
+  // We will only emit warnings for wrong flair directives.
+  // Other (ignored) directives will receive warnings during regular
+  // compilation anyway.
+  auto &lang_features = const_cast<common::LanguageFeatureControl &>(
+      SemanticsCtx.languageFeatures());
+  lang_features.EnableWarning(common::UsageWarning::IgnoredDirective, false);
 
   // Populate globalScope based on the parse tree, without
   // performing semantic analysis.
   sema::ResolveNames(SemanticsCtx, ParseTree.value(),
                      SemanticsCtx.globalScope());
 
-  // Traverse global scope
-  sema::Scope &root = SemanticsCtx.globalScope();
-  traverse_global_scope(root, wdata);
+  // Collect `flair$` compiler directives
+  directive_collector dc{SemanticsCtx};
+  parse::Walk(ParseTree.value(), dc);
+  wdata->collector = &dc;
 
+  context = &SemanticsCtx;
+
+  return true;
+}
+
+void custom_action::traverseSemantics() {
+  // Traverse global scope
+  sema::Scope &root = context->globalScope();
+  traverse_global_scope(root, wdata);
+  flu::flush_messages(*context, getInstance().getSemaOutputStream());
+}
+
+void custom_action::codegen() {
   // Codegen: one py_<module>.F90 wrapper per module with wrappable entities.
   for (auto const &mi : wdata->modules) {
     if (not codegen::has_wrappable(mi))
@@ -58,10 +82,16 @@ void custom_action::executeAction() {
   }
 
   // TODO: Generation should fail if unsupported arguments are detected.
-  // Method must be explicitly ignored with compiler directive !FLAIR_IGNORE
+  // Method must be explicitly ignored with compiler directive `!flair$ ignore`
 
-  // Flush any diagnostics queued during codegen (e.g. unsupported arguments).
-  flu::flush_messages(SemanticsCtx, Ci.getSemaOutputStream());
+  flu::flush_messages(*context, getInstance().getSemaOutputStream());
+}
+
+void custom_action::executeAction() {
+  if (initSemantics()) {
+    traverseSemantics();
+    codegen();
+  }
 }
 
 } // namespace flair::parser

@@ -13,11 +13,17 @@ namespace flair::parser {
 // ---------------------------------------------------------------------
 class custom_action : public Fortran::frontend::PrescanAndParseAction {
   std::shared_ptr<wdata_t> wdata;
+  sema::SemanticsContext *context = nullptr;
 
 public:
   explicit custom_action() { wdata = std::make_shared<wdata_t>(); }
 
   void executeAction() override;
+
+private:
+  bool initSemantics();
+  void traverseSemantics();
+  void codegen();
 };
 
 } // namespace flair::parser

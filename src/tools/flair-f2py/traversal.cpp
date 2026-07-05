@@ -1,22 +1,30 @@
 #include <flang/Semantics/symbol.h>
 #include <flang/Semantics/type.h>
-#include <iostream>
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/Support/CommandLine.h>
 
 #include "traversal.hpp"
 
+// --- state ---
+bool state::ignore(sema::Symbol const &sym) {
+  return ignored.find(sym.name().ToString()) != ignored.end() or
+         (default_private and not sym.attrs().test(sema::Attr::PUBLIC));
+}
+// -------------
+
 // --- Forward declarations ---
 dtype_info_t *get_dtype_of_initializer(sema::Symbol const &sym,
                                        module_info_t const &mi);
-void traverse_module(sema::Symbol const &mod_sym, module_info_t &mi);
+void traverse_module(sema::Symbol const &mod_sym, state &s);
 // ----------------------------
 
 void traverse_global_scope(const sema::Scope &root,
                            std::shared_ptr<wdata_t> wdata) {
+  const std::set<std::string> &ignore = wdata->collector->ignore;
   for (auto const &[name, sym_ref] : root) {
     sema::Symbol const &sym = sym_ref.get();
-    if (not sym.has<sema::ModuleDetails>())
+    if (not sym.has<sema::ModuleDetails>() or
+        ignore.find(sym.name().ToString()) != ignore.end())
       continue;
     // If the origin of the module is a .mod file, skip it.
     // Avoids transitive traversal of USEd modules.
@@ -24,43 +32,42 @@ void traverse_global_scope(const sema::Scope &root,
       continue;
 
     module_info_t mi(name.ToString());
-    traverse_module(sym, mi);
+    state s{mi, ignore};
+    traverse_module(sym, s);
     wdata->modules.push_back(std::move(mi));
   }
 }
 
-void traverse_module(sema::Symbol const &mod_sym, module_info_t &mi) {
-  bool default_private = mod_sym.get<sema::ModuleDetails>().isDefaultPrivate();
+void traverse_module(sema::Symbol const &mod_sym, state &s) {
+  s.default_private = mod_sym.get<sema::ModuleDetails>().isDefaultPrivate();
   auto mod_scope = mod_sym.get<sema::ModuleDetails>().scope();
   if (mod_scope == nullptr)
     return;
 
-  auto const match_subprogram = [&default_private,
-                                 &mi](sema::Symbol const &sym) {
-    if (default_private and not sym.attrs().test(sema::Attr::PUBLIC))
+  auto const match_subprogram = [&s](sema::Symbol const &sym) {
+    if (s.ignore(sym))
       return;
     if (not sym.has<sema::SubprogramDetails>())
       return;
 
     fnt_info_t fi{&sym, false, nullptr};
-    if (auto dt = get_dtype_of_initializer(sym, mi))
+    if (auto dt = get_dtype_of_initializer(sym, s.mi))
       dt->init = std::move(fi); // We have found the subroutine in charge of
                                 // initializing a derived_type
     else
-      mi.functions.emplace_back(fi);
+      s.mi.functions.emplace_back(fi);
   };
 
-  auto const match_interface = [&default_private,
-                                &mi](sema::Symbol const &sym) {
-    if (default_private and not sym.attrs().test(sema::Attr::PUBLIC))
+  auto const match_interface = [&s](sema::Symbol const &sym) {
+    if (s.ignore(sym))
       return;
     if (not sym.has<sema::GenericDetails>())
       return;
 
     iface_info_t iface{&sym};
     if (sym.get<sema::GenericDetails>().derivedType()) {
-      if (auto const &it = mi.derived_types.find(sym.name().ToString());
-          it != mi.derived_types.end()) {
+      if (auto const &it = s.mi.derived_types.find(sym.name().ToString());
+          it != s.mi.derived_types.end()) {
         // We have found an interface with the same name as a previously
         // matched derived type => interface-as-constructor pattern match
         it->second.ctor = std::move(iface);
@@ -68,15 +75,11 @@ void traverse_module(sema::Symbol const &mod_sym, module_info_t &mi) {
       }
     }
 
-    std::cout << "Interface " << sym.name().ToString() << " has "
-              << sym.detailsIf<sema::GenericDetails>()->specificProcs().size()
-              << " specific procedures" << std::endl;
-
-    mi.interfaces.emplace_back(iface);
+    s.mi.interfaces.emplace_back(iface);
   };
 
-  auto const match_dtype = [&default_private, &mi](sema::Symbol const &sym) {
-    if (default_private and not sym.attrs().test(sema::Attr::PUBLIC))
+  auto const match_dtype = [&s](sema::Symbol const &sym) {
+    if (s.ignore(sym))
       return;
 
     // A derived type may be shadowed in its module scope by a generic interface
@@ -89,7 +92,7 @@ void traverse_module(sema::Symbol const &mod_sym, module_info_t &mi) {
       return;
 
     auto const &[it, _] =
-        mi.derived_types.emplace(type_sym->name().ToString(), type_sym);
+        s.mi.derived_types.emplace(type_sym->name().ToString(), type_sym);
     dtype_info_t &dt = it->second;
     if (auto const *parent =
             type_sym->GetParentTypeSpec()) // extends(...) base type
