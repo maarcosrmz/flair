@@ -97,46 +97,140 @@ static str_t ctor_new_body(str_t const &pf) {
   return b;
 }
 
+// Local declarations shared by the two tp_init bodies: the kwarg scratch
+// pointer, one typed kw_<name> / logical got_<name> per accepted keyword, and
+// the scratch used by the unknown-keyword scan.
+static str_t
+arg_check_decls(std::vector<sema::Symbol const *> const &accepted) {
+  str_t d;
+  d += "        type(c_ptr) :: arg\n";
+  for (sema::Symbol const *s : accepted) {
+    str_t const nm = s->name().ToString();
+    d += fmt::format("        {} :: kw_{}\n", ftype(*s->GetType()), nm);
+    d += fmt::format("        logical :: got_{}\n", nm);
+  }
+  d += "        integer(c_ptrdiff_t) :: kw_pos\n";
+  d += "        type(c_ptr) :: kw_key, kw_val, kw_msg\n";
+  d += "        logical :: kw_known\n";
+  return d;
+}
+
+// Argument validation shared by the two tp_init bodies. Emits, in order: a
+// guard rejecting positional args, a scan raising TypeError on the first
+// unexpected keyword (named CPython-style), the read loop that records
+// presence, and a missing-required-argument check per accepted keyword. Any
+// failure sets r = -1 and returns early; success falls through to the
+// template's trailing r = 0.
+static str_t arg_check_stmts(std::vector<sema::Symbol const *> const &accepted,
+                             str_t const &pyname, string_pool_t &strings) {
+  str_t b;
+
+  // Reject positional arguments: tp_init is keyword-only here.
+  str_t const s_pos =
+      strings.intern(pyname + "() takes no positional arguments");
+  b += "        if (c_associated(args)) then\n";
+  b += "            if (PyTuple_Size(args) > 0_c_ptrdiff_t) then\n";
+  b += fmt::format(
+      "                call PyErr_SetString(PyExc_TypeError, c_loc({}))\n",
+      s_pos);
+  b += "                r = -1\n";
+  b += "                return\n";
+  b += "            end if\n";
+  b += "        end if\n\n";
+
+  for (sema::Symbol const *s : accepted)
+    b += fmt::format("        got_{} = .false.\n", s->name().ToString());
+  if (!accepted.empty())
+    b += "\n";
+
+  // Scan every key: raise on the first one that is not an accepted keyword,
+  // then read the accepted ones and mark them present. Both walk the same dict.
+  str_t const s_q = strings.intern("'");
+  str_t const s_badkw =
+      strings.intern("' is an invalid keyword argument for " + pyname + "()");
+  b += "        if (c_associated(kwds)) then\n";
+  b += "            kw_pos = 0_c_ptrdiff_t\n";
+  b +=
+      "            do while (PyDict_Next(kwds, kw_pos, kw_key, kw_val) /= 0)\n";
+  b += "                kw_known = .false.\n";
+  for (sema::Symbol const *s : accepted)
+    b += fmt::format("                if (PyUnicode_CompareWithASCIIString(kw_"
+                     "key, c_loc({})) == 0) kw_known = .true.\n",
+                     strings.intern(s->name().ToString()));
+  b += "                if (.not. kw_known) then\n";
+  b += fmt::format("                    kw_msg = PyUnicode_Concat(PyUnicode_"
+                   "FromString(c_loc({})), kw_key)\n",
+                   s_q);
+  b += fmt::format("                    kw_msg = PyUnicode_Concat(kw_msg, "
+                   "PyUnicode_FromString(c_loc({})))\n",
+                   s_badkw);
+  // kw_msg leaks by one ref on this error path (PyErr_SetObject takes its own);
+  // acceptable on an error exit, consistent with existing generated code.
+  b += "                    call PyErr_SetObject(PyExc_TypeError, kw_msg)\n";
+  b += "                    r = -1\n";
+  b += "                    return\n";
+  b += "                end if\n";
+  b += "            end do\n";
+  for (sema::Symbol const *s : accepted) {
+    str_t const nm = s->name().ToString();
+    b +=
+        fmt::format("            arg = PyDict_GetItemString(kwds, c_loc({}))\n",
+                    strings.intern(nm));
+    b += "            if (c_associated(arg)) then\n";
+    b += fmt::format("                kw_{} = {}\n", nm,
+                     from_py(*s->GetType(), "arg"));
+    b += fmt::format("                got_{} = .true.\n", nm);
+    b += "            end if\n";
+  }
+  b += "        end if\n\n";
+
+  // Every accepted keyword is required (no optional-dummy support): missing one
+  // would otherwise leave kw_<name> uninitialized and pass garbage to Fortran.
+  for (sema::Symbol const *s : accepted) {
+    str_t const nm = s->name().ToString();
+    str_t const s_miss =
+        strings.intern(pyname + "() missing required argument '" + nm + "'");
+    b += fmt::format("        if (.not. got_{}) then\n", nm);
+    b += fmt::format(
+        "            call PyErr_SetString(PyExc_TypeError, c_loc({}))\n",
+        s_miss);
+    b += "            r = -1\n";
+    b += "            return\n";
+    b += "        end if\n";
+  }
+  if (!accepted.empty())
+    b += "\n";
+
+  return b;
+}
+
 // tp_init for ctor case: parses public scalar fields as kwargs, then calls the
 // pointer-returning constructor interface and stores the result.
 static str_t ctor_init_body(sema::Symbol const &tsym,
                             sema::SymbolVector const &fields,
                             string_pool_t &strings) {
-  sema::SymbolVector scalars;
+  std::vector<sema::Symbol const *> accepted;
   for (const sema::Symbol &f : fields)
     if (flu::rank_of(f) == 0)
-      scalars.push_back(f);
+      accepted.push_back(&f);
+
+  str_t const pyname = tname(tsym);
 
   str_t b;
   b += fmt::format("        type({}), pointer :: pt\n", struct_name(tsym));
   b += fmt::format("        type({}), pointer :: p\n", tname(tsym));
-  b += "        type(c_ptr) :: arg\n";
-  for (const sema::Symbol &f : scalars) {
-    str_t const nm = f.name().ToString();
-    b += fmt::format("        {} :: kw_{}\n", ftype(*f.GetType()), nm);
-  }
+  b += arg_check_decls(accepted);
   b += "\n";
 
   b += "        call c_f_pointer(self, pt)\n\n";
 
-  if (!scalars.empty()) {
-    b += "        if (c_associated(kwds)) then\n";
-    for (const sema::Symbol &f : scalars) {
-      str_t const nm = f.name().ToString();
-      b += fmt::format(
-          "            arg = PyDict_GetItemString(kwds, c_loc({}))\n",
-          strings.intern(nm));
-      b += fmt::format("            if (c_associated(arg)) kw_{} = {}\n", nm,
-                       from_py(*f.GetType(), "arg"));
-    }
-    b += "        end if\n\n";
-  }
+  b += arg_check_stmts(accepted, pyname, strings);
 
   str_t ctor_args;
-  for (const sema::Symbol &f : scalars) {
+  for (sema::Symbol const *f : accepted) {
     if (!ctor_args.empty())
       ctor_args += ", ";
-    str_t const nm = f.name().ToString();
+    str_t const nm = f->name().ToString();
     ctor_args += nm + "=kw_" + nm;
   }
   b += fmt::format("        p => {}({})\n", tname(tsym), ctor_args);
@@ -153,7 +247,7 @@ static str_t init_init_body(sema::Symbol const &tsym, fnt_info_t const &init_fi,
   auto const &all = sub.dummyArgs();
 
   // Collect supported dummies (skip first — it's the object being initialized).
-  std::vector<sema::Symbol *> dummies;
+  std::vector<sema::Symbol const *> accepted;
   bool first = true;
   for (sema::Symbol *d : all) {
     if (first) {
@@ -164,37 +258,24 @@ static str_t init_init_body(sema::Symbol const &tsym, fnt_info_t const &init_fi,
       continue;
     auto const *t = d->GetType();
     if (t != nullptr && intrinsic_supported(*t))
-      dummies.push_back(d);
+      accepted.push_back(d);
   }
+
+  str_t const pyname = tname(tsym);
 
   str_t b;
   b += fmt::format("        type({}), pointer :: pt\n", struct_name(tsym));
   b += fmt::format("        type({}), pointer :: p\n", tname(tsym));
-  b += "        type(c_ptr) :: arg\n";
-  for (sema::Symbol *d : dummies) {
-    str_t const nm = d->name().ToString();
-    b += fmt::format("        {} :: kw_{}\n", ftype(*d->GetType()), nm);
-  }
+  b += arg_check_decls(accepted);
   b += "\n";
 
   b += "        call c_f_pointer(self, pt)\n";
   b += fmt::format("        call c_f_pointer(pt%{}, p)\n\n", ptr_field(tsym));
 
-  if (!dummies.empty()) {
-    b += "        if (c_associated(kwds)) then\n";
-    for (sema::Symbol *d : dummies) {
-      str_t const nm = d->name().ToString();
-      b += fmt::format(
-          "            arg = PyDict_GetItemString(kwds, c_loc({}))\n",
-          strings.intern(nm));
-      b += fmt::format("            if (c_associated(arg)) kw_{} = {}\n", nm,
-                       from_py(*d->GetType(), "arg"));
-    }
-    b += "        end if\n\n";
-  }
+  b += arg_check_stmts(accepted, pyname, strings);
 
   str_t call_args;
-  for (sema::Symbol *d : dummies) {
+  for (sema::Symbol const *d : accepted) {
     if (!call_args.empty())
       call_args += ", ";
     str_t const nm = d->name().ToString();

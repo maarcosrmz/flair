@@ -255,12 +255,35 @@ module python_api_mod
             type(c_ptr) :: r
         end function
 
+        function PyUnicode_Concat(left, right) &
+                bind(C, name="PyUnicode_Concat") result(r)
+            import :: c_ptr
+            type(c_ptr), value :: left, right
+            type(c_ptr) :: r   ! new reference
+        end function
+
+        function PyUnicode_CompareWithASCIIString(uni, str) &
+                bind(C, name="PyUnicode_CompareWithASCIIString") result(r)
+            import :: c_ptr, c_int
+            type(c_ptr), value :: uni
+            type(c_ptr), value :: str   ! null-terminated ASCII C string
+            integer(c_int) :: r         ! 0 if equal
+        end function
+
         ! --- dict ---
         function PyDict_GetItemString(dp, key) bind(C, name="PyDict_GetItemString") result(r)
             import :: c_ptr
             type(c_ptr), value :: dp
             type(c_ptr), value :: key
             type(c_ptr) :: r
+        end function
+
+        function PyDict_Next(dp, ppos, pkey, pvalue) bind(C, name="PyDict_Next") result(r)
+            import :: c_ptr, c_ptrdiff_t, c_int
+            type(c_ptr),          value       :: dp
+            integer(c_ptrdiff_t), intent(inout) :: ppos
+            type(c_ptr),          intent(out) :: pkey, pvalue   ! borrowed refs
+            integer(c_int) :: r                                 ! 0 when exhausted
         end function
 
         ! --- sequence ---
@@ -311,6 +334,12 @@ module python_api_mod
             import :: c_ptr
             type(c_ptr), value :: exc
             type(c_ptr), value :: msg
+        end subroutine
+
+        subroutine PyErr_SetObject(exc, val) bind(C, name="PyErr_SetObject")
+            import :: c_ptr
+            type(c_ptr), value :: exc
+            type(c_ptr), value :: val
         end subroutine
 
         function PyErr_Occurred() bind(C, name="PyErr_Occurred") result(r)
