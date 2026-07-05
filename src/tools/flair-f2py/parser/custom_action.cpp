@@ -54,9 +54,8 @@ bool custom_action::initSemantics() {
                      SemanticsCtx.globalScope());
 
   // Collect `flair$` compiler directives
-  directive_collector dc{SemanticsCtx};
-  parse::Walk(ParseTree.value(), dc);
-  wdata->collector = &dc;
+  wdata->collector = std::make_unique<directive_collector>(SemanticsCtx);
+  parse::Walk(ParseTree.value(), *wdata->collector.get());
 
   context = &SemanticsCtx;
 

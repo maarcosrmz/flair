@@ -58,7 +58,7 @@ struct module_info_t {
 
 struct wdata_t {
   std::vector<module_info_t> modules;
-  flair::parser::directive_collector *collector = nullptr;
+  std::unique_ptr<flair::parser::directive_collector> collector;
 
   explicit wdata_t() = default;
 };
