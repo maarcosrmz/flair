@@ -6,6 +6,7 @@
 #include <flang/Semantics/symbol.h>
 #include <flang/Semantics/type.h>
 
+#include "flu/diagnostics.hpp"
 #include "flu/symbols.hpp"
 #include "flu/types.hpp"
 #include "functions.hpp" // parse_args, build_result, drop_self (shared with methods)
@@ -42,16 +43,27 @@ sema::SymbolVector public_fields(dtype_info_t const &dt) {
   sema::SymbolVector out;
   for (auto const &sym : flu::public_components(*dt.ptr)) {
     auto const *t = sym->GetType();
-    if (t == nullptr || !intrinsic_supported(*t))
-      continue; // intrinsic real/integer only for now
+    if (t == nullptr || !intrinsic_supported(*t)) {
+      // intrinsic real/integer only for now
+      flu::emit_error(*sym, "flair-f2py: cannot expose component '" +
+                                sym->name().ToString() +
+                                "': unsupported type; property skipped");
+      continue;
+    }
     int const rank = flu::rank_of(sym);
     if (rank == 0) {
       out.push_back(sym);
       continue;
     }
     // rank-1 arrays and allocatable/pointer for now
-    if (rank == 1 && (flu::is_allocatable(sym) || flu::is_pointer(sym)))
+    if (rank == 1 && (flu::is_allocatable(sym) || flu::is_pointer(sym))) {
       out.push_back(sym);
+      continue;
+    }
+    flu::emit_error(*sym, "flair-f2py: cannot expose component '" +
+                              sym->name().ToString() +
+                              "': only scalars and rank-1 pointer/allocatable "
+                              "arrays are supported; property skipped");
   }
   return out;
 }
@@ -246,9 +258,13 @@ str_t gen_method(dtype_info_t const &dt, sema::Symbol const &binding,
 
   sema::DeclTypeSpec const *rt =
       sub.isFunction() ? sub.result().GetType() : nullptr;
-  if (sub.isFunction() && (rt == nullptr || !intrinsic_supported(*rt)))
+  if (sub.isFunction() && (rt == nullptr || !intrinsic_supported(*rt))) {
+    flu::emit_error(binding, "flair-f2py: cannot wrap method '" + tn + "%" +
+                                 pyname +
+                                 "': unsupported result type; method skipped");
     return fmt::format("    ! TODO: unsupported result type: {}%{}\n\n", tn,
                        pyname);
+  }
 
   ++n;
   fills += method_row(tn + "_methods", n, strings.intern(pyname), wrapper,

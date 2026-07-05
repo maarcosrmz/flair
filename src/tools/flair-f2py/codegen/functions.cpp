@@ -59,8 +59,16 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
 
     if (str_t const dn = flu::derived_name(*t); !dn.empty()) {
       sym_ptr_t wt = wrapped_type(m, dn);
-      if (wt == nullptr)
-        return false; // a type we don't wrap
+      if (wt == nullptr) { // a type we don't wrap
+        // FIXME: if we don't wrap the type directly, add the interface to
+        // convert the argument from a PyObject to the respective fortran type
+        // (since we do not wrap types located in separate files)
+        flu::emit_error(*d, "flair-f2py: cannot wrap argument '" +
+                                d->name().ToString() + "': derived type '" +
+                                dn +
+                                "' is not a wrapped type; procedure skipped");
+        return false;
+      }
       str_t const val = fmt::format("v{}", i);
       decls += fmt::format("        type({}), pointer :: pt{}\n",
                            struct_name(*wt), i);
@@ -131,6 +139,9 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
       }
       add_actual(val);
     } else {
+      flu::emit_error(*d, "flair-f2py: cannot wrap argument '" +
+                              d->name().ToString() +
+                              "': unsupported type or rank; procedure skipped");
       return false;
     }
     ++i;
@@ -181,8 +192,11 @@ str_t gen_module_function(semantics::Symbol const &fn, module_info_t const &m,
 
   semantics::DeclTypeSpec const *rt =
       sub.isFunction() ? sub.result().GetType() : nullptr;
-  if (sub.isFunction() && (rt == nullptr || !intrinsic_supported(*rt)))
+  if (sub.isFunction() && (rt == nullptr || !intrinsic_supported(*rt))) {
+    flu::emit_error(fn, "flair-f2py: cannot wrap function '" + pyname +
+                            "': unsupported result type; function skipped");
     return "";
+  }
 
   if (fills != nullptr)
     *fills +=
