@@ -136,9 +136,8 @@ str_t codegen_module(module_info_t const &m) {
       }
     }
     // ...then the dispatching wrapper exposed under the generic's name.
-    procedures +=
-        gen_interface_wrapper(*iface.ptr, generated, m, strings, &modfn_fills,
-                              nmod);
+    procedures += gen_interface_wrapper(*iface.ptr, generated, m, strings,
+                                        &modfn_fills, nmod);
   }
   modfn_fills += method_sentinel("module_methods", nmod + 1);
 

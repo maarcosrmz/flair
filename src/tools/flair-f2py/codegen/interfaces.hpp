@@ -13,7 +13,8 @@ namespace codegen {
 // name. Inspects the incoming arguments at runtime and forwards `(self, args)`
 // to the matching specific-procedure wrapper (`py_mod_<specific>`). `specifics`
 // must list only the specifics whose wrappers were actually generated. Appends
-// its module-table row to `fills` (bumps `n`). "" if there is nothing to expose.
+// its module-table row to `fills` (bumps `n`). "" if there is nothing to
+// expose.
 str_t gen_interface_wrapper(
     Fortran::semantics::Symbol const &iface,
     std::vector<Fortran::semantics::Symbol const *> const &specifics,

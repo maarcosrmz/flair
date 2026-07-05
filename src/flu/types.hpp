@@ -15,10 +15,13 @@ class DeclTypeSpec;
 // ---------------------------------------------------------------------------
 namespace flu {
 
-// Intrinsic type category of a declared type, or nullopt for derived/unsupported.
-std::optional<Fortran::common::TypeCategory> category(Fortran::semantics::DeclTypeSpec const &t);
+// Intrinsic type category of a declared type, or nullopt for
+// derived/unsupported.
+std::optional<Fortran::common::TypeCategory>
+category(Fortran::semantics::DeclTypeSpec const &t);
 
-// Intrinsic kind value (== element byte size for numeric types); 0 if non-intrinsic.
+// Intrinsic kind value (== element byte size for numeric types); 0 if
+// non-intrinsic.
 int kind_of(Fortran::semantics::DeclTypeSpec const &t);
 
 // Folded name of a derived type, or "" if `t` is not a derived type.

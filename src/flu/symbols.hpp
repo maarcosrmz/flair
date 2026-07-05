@@ -6,13 +6,14 @@
 namespace Fortran::semantics {
 class Symbol;
 using SymbolVector = std::vector<common::Reference<const Symbol>>;
-}
+} // namespace Fortran::semantics
 
 namespace sema = Fortran::semantics;
 
 namespace flu {
 
-// Resolve a type-bound binding to the actual subprogram it binds; nullptr if not a binding.
+// Resolve a type-bound binding to the actual subprogram it binds; nullptr if
+// not a binding.
 sema::Symbol const *binding_actual(sema::Symbol const &binding);
 
 // Rank of an object entity (0 = scalar / non-object).

@@ -84,11 +84,11 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
       if (d->attrs().test(semantics::Attr::INTENT_OUT) ||
           d->attrs().test(semantics::Attr::INTENT_INOUT)) {
         flu::emit_error(
-            *d,
-            "flair-f2py: cannot wrap scalar argument '" + d->name().ToString() +
-                "' with intent(out)/intent(inout): primitive scalars are "
-                "passed by value and cannot be written back; procedure "
-                "skipped");
+            *d, "flair-f2py: cannot wrap scalar argument '" +
+                    d->name().ToString() +
+                    "' with intent(out)/intent(inout): primitive scalars are "
+                    "passed by value and cannot be written back; procedure "
+                    "skipped");
         return false;
       }
       add_actual(from_py(*t, obj));
@@ -101,9 +101,9 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
       // no-op when no copy was made, i.e. the zero-copy fast path).
       bool const writeback = d->attrs().test(semantics::Attr::INTENT_OUT) ||
                              d->attrs().test(semantics::Attr::INTENT_INOUT);
-      str_t const reqs = writeback
-                             ? "NPY_ARRAY_F_CONTIGUOUS + NPY_ARRAY_WRITEBACKIFCOPY"
-                             : "NPY_ARRAY_F_CONTIGUOUS";
+      str_t const reqs =
+          writeback ? "NPY_ARRAY_F_CONTIGUOUS + NPY_ARRAY_WRITEBACKIFCOPY"
+                    : "NPY_ARRAY_F_CONTIGUOUS";
       str_t const arr = fmt::format("arr{}", i);
       str_t const val = fmt::format("v{}", i);
       str_t const shp = fmt::format("shp{}", i);
@@ -124,17 +124,17 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
                            "   {}\n            return\n        end if\n",
                            arr, fail_return);
       for (int k = 0; k < rr; ++k)
-        fetch += fmt::format("        {}({}) = PyArray_DIM({}, {}_c_int)\n", shp,
-                             k + 1, arr, k);
-      fetch += fmt::format("        call c_f_pointer(PyArray_DATA({}), {}, {})\n",
-                           arr, val, shp);
+        fetch += fmt::format("        {}({}) = PyArray_DIM({}, {}_c_int)\n",
+                             shp, k + 1, arr, k);
+      fetch +=
+          fmt::format("        call c_f_pointer(PyArray_DATA({}), {}, {})\n",
+                      arr, val, shp);
       if (cleanup != nullptr) {
         // Resolve before decref: an unresolved writeback array warns and drops
         // the write on decref.
         if (writeback)
-          *cleanup +=
-              fmt::format("        wb{0} = PyArray_ResolveWritebackIfCopy({1})\n",
-                          i, arr);
+          *cleanup += fmt::format(
+              "        wb{0} = PyArray_ResolveWritebackIfCopy({1})\n", i, arr);
         *cleanup += fmt::format("        call Py_DecRef({})\n", arr);
       }
       add_actual(val);

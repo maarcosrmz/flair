@@ -39,10 +39,10 @@ namespace {
 // numpy dtype + rank, both of which *are* visible at runtime.
 struct arg_tag_t {
   enum kind_t { Int, Real, Derived, Array } kind;
-  str_t derived;  // Derived: tp_name literal "<modpy>.<Class>"
-  str_t npy;      // Array: numpy type code constant
-  int rank = 0;   // Array: rank
-  int skind = 0;  // Int/Real: Fortran kind (for widest-overload selection)
+  str_t derived; // Derived: tp_name literal "<modpy>.<Class>"
+  str_t npy;     // Array: numpy type code constant
+  int rank = 0;  // Array: rank
+  int skind = 0; // Int/Real: Fortran kind (for widest-overload selection)
 };
 
 // Stable per-position key, ignoring scalar kind, used for grouping overloads
@@ -227,8 +227,7 @@ str_t gen_interface_wrapper(
     decls += "        integer(c_int) :: nd\n";
     decls += "        type(c_ptr) :: dsc\n";
   }
-  str_t const s_err =
-      strings.intern("unexpected argument type for " + pyname);
+  str_t const s_err = strings.intern("unexpected argument type for " + pyname);
 
   // ---- classify each discriminating position into tag<p> -------------------
   str_t cls;
@@ -344,10 +343,9 @@ str_t gen_interface_wrapper(
       cls += fmt::format("{}    dsc = PyArray_DESCR(a{})\n", I, p);
       bool first = true;
       for (arg_tag_t const *t : array_tags) {
-        cls += fmt::format(
-            "{}    {} (nd == {} .and. c_ptr_eq(dsc, "
-            "PyArray_DescrFromType({}))) then\n",
-            I, first ? "if" : "else if", t->rank, t->npy);
+        cls += fmt::format("{}    {} (nd == {} .and. c_ptr_eq(dsc, "
+                           "PyArray_DescrFromType({}))) then\n",
+                           I, first ? "if" : "else if", t->rank, t->npy);
         cls += fmt::format("{}        tag{} = {}\n", I, p, code_of(*t));
         first = false;
       }

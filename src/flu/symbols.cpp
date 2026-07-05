@@ -32,25 +32,31 @@ bool is_allocatable(semantics::Symbol const &sym) {
 sema::SymbolVector public_components(sema::Symbol const &type_sym) {
   sema::SymbolVector out;
   auto const *scope = type_sym.scope();
-  auto const *dtd   = type_sym.detailsIf<sema::DerivedTypeDetails>();
-  if (scope == nullptr || dtd == nullptr) return out;
+  auto const *dtd = type_sym.detailsIf<sema::DerivedTypeDetails>();
+  if (scope == nullptr || dtd == nullptr)
+    return out;
   for (auto const &cn : dtd->componentNames()) {
     auto it = scope->find(cn);
-    if (it == scope->end()) continue;
+    if (it == scope->end())
+      continue;
     sema::Symbol const &comp = it->second.get();
-    if (comp.attrs().test(sema::Attr::PRIVATE)) continue;
-    if (not comp.has<sema::ObjectEntityDetails>()) continue; // skip parent comp / procs
+    if (comp.attrs().test(sema::Attr::PRIVATE))
+      continue;
+    if (not comp.has<sema::ObjectEntityDetails>())
+      continue; // skip parent comp / procs
     out.push_back(comp);
   }
   return out;
 }
 
 // We skip checking for the private attribute, as we need to generate a wrapper
-// for each specific procedure, which can be called within the interface wrapper.
-// The individual procedure wrappers are not exposed to the python module.
+// for each specific procedure, which can be called within the interface
+// wrapper. The individual procedure wrappers are not exposed to the python
+// module.
 sema::SymbolVector get_specific_procs(const sema::Symbol &iface_sym) {
   auto const *gtd = iface_sym.detailsIf<sema::GenericDetails>();
-  if (gtd == nullptr) return sema::SymbolVector{};
+  if (gtd == nullptr)
+    return sema::SymbolVector{};
   return gtd->specificProcs();
 }
 
