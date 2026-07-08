@@ -1,0 +1,54 @@
+    ! ===== {field} property (derived-type view) =====
+
+    ! getter: returns a view object whose {sub_ptr_field} aliases p%{field} inside the
+    ! parent's heap object. The view holds a reference on the parent (numpy 'base'
+    ! pattern), so the parent outlives every view; dealloc of a view only drops
+    ! that reference and never deallocates.
+    function {get_fn}(self, closure) bind(C) result(r)
+        type(c_ptr), value :: self, closure
+        type(c_ptr) :: r
+        type({struct}), pointer :: pt
+        type({tname}), pointer :: p
+        type({sub_struct}), pointer :: spt
+        call c_f_pointer(self, pt)
+        call c_f_pointer(pt%{ptr_field}, p)
+        r = PyType_GenericAlloc({type_obj}, 0_c_ptrdiff_t)
+        if (.not. c_associated(r)) return
+        call c_f_pointer(r, spt)
+        spt%{sub_ptr_field} = c_loc(p%{field})
+        spt%owner = self
+        call Py_IncRef(self)
+    end function
+
+    ! setter: copy-in. Requires a {sub_tname} instance; intrinsic assignment
+    ! deep-copies allocatable components.
+    function {set_fn}(self, value, closure) bind(C) result(r)
+        type(c_ptr), value :: self, value, closure
+        integer(c_int) :: r
+        type({struct}), pointer :: pt
+        type({tname}), pointer :: p
+        type({sub_struct}), pointer :: vpt
+        type({sub_tname}), pointer :: v
+        r = -1
+        if (.not. c_associated(value)) then
+            call PyErr_SetString(PyExc_TypeError, c_loc({s_del}))
+            return
+        end if
+        if (PyObject_IsInstance(value, {type_obj}) /= 1) then
+            ! IsInstance may return -1 with its own exception set; don't clobber it
+            if (.not. c_associated(PyErr_Occurred())) then
+                call PyErr_SetString(PyExc_TypeError, c_loc({s_type}))
+            end if
+            return
+        end if
+        call c_f_pointer(self, pt)
+        call c_f_pointer(pt%{ptr_field}, p)
+        call c_f_pointer(value, vpt)
+        call c_f_pointer(vpt%{sub_ptr_field}, v)
+        ! aliased self-assignment (value is a view of this very component) is not
+        ! reliably temped by compilers when the LHS has allocatable components
+        if (.not. associated(v, p%{field})) then
+            p%{field} = v
+        end if
+        r = 0
+    end function

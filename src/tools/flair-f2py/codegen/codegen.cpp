@@ -56,8 +56,8 @@ str_t codegen_module(module_info_t const &m) {
 
     structs += gen_object_struct(dt);
 
-    sema::SymbolVector fields = public_fields(dt);
-    procedures += gen_lifecycle(dt, fields, strings) + "\n";
+    sema::SymbolVector fields = public_fields(dt, m);
+    procedures += gen_lifecycle(dt, fields, m, strings) + "\n";
 
     str_t method_fills;
     int nm = 0;
@@ -73,7 +73,7 @@ str_t codegen_module(module_info_t const &m) {
     str_t getset_fills;
     int ng = 0;
     for (const sema::Symbol &f : fields)
-      procedures += gen_getset(dt, f, strings, getset_fills, ng);
+      procedures += gen_getset(dt, f, m, strings, getset_fills, ng);
     getset_fills += getset_sentinel(tn + "_getset", ng + 1);
 
     table_decls +=
@@ -85,6 +85,8 @@ str_t codegen_module(module_info_t const &m) {
         "    type(PyType_Slot_t), target, save :: {}_slots(6)\n", tn);
     table_decls +=
         fmt::format("    type(PyType_Spec_t), target, save :: {}_spec\n", tn);
+    table_decls += fmt::format(
+        "    type(c_ptr), save :: py_{}_type_obj = c_null_ptr\n", tn);
 
     pyinit_decls +=
         fmt::format("        type({}) :: dummy_{}\n", struct_name(tsym), tn);

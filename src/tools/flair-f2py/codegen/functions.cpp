@@ -34,7 +34,8 @@ static sym_ptr_t wrapped_type(module_info_t const &m, str_t const &name) {
 
 bool parse_args(std::vector<semantics::Symbol *> const &dummies,
                 module_info_t const &m, str_t const &fail_return, str_t &decls,
-                str_t &fetch, str_t &call_args, str_t *cleanup) {
+                str_t &fetch, str_t &call_args, string_pool_t &strings,
+                str_t *cleanup) {
   auto add_actual = [&](str_t const &actual) {
     if (!call_args.empty())
       call_args += ", ";
@@ -70,10 +71,25 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
         return false;
       }
       str_t const val = fmt::format("v{}", i);
+      str_t const s_argtype =
+          strings.intern("argument '" + d->name().ToString() + "' must be a " +
+                         clsname(*wt) + " instance");
       decls += fmt::format("        type({}), pointer :: pt{}\n",
                            struct_name(*wt), i);
       decls +=
           fmt::format("        type({}), pointer :: {}\n", tname(*wt), val);
+      fetch += fmt::format("        if (PyObject_IsInstance({}, "
+                           "py_{}_type_obj) /= 1) then\n",
+                           obj, tname(*wt));
+      // IsInstance may return -1 with its own exception set; don't clobber it.
+      fetch += "            if (.not. c_associated(PyErr_Occurred())) then\n";
+      fetch += fmt::format(
+          "                call PyErr_SetString(PyExc_TypeError, c_loc({}))\n",
+          s_argtype);
+      fetch += "            end if\n";
+      fetch += fmt::format("            {}\n            return\n        end "
+                           "if\n",
+                           fail_return);
       fetch += fmt::format("        call c_f_pointer({}, pt{})\n", obj, i);
       fetch += fmt::format("        call c_f_pointer(pt{}%{}, {})\n", i,
                            ptr_field(*wt), val);
@@ -187,7 +203,7 @@ str_t gen_module_function(semantics::Symbol const &fn, module_info_t const &m,
 
   str_t decls, fetch, call_args, cleanup;
   if (!parse_args(sub.dummyArgs(), m, "r = c_null_ptr", decls, fetch, call_args,
-                  &cleanup))
+                  strings, &cleanup))
     return "";
 
   semantics::DeclTypeSpec const *rt =

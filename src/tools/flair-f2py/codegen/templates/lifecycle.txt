@@ -21,7 +21,10 @@
         type({tname}), pointer :: p
 
         call c_f_pointer(self, pt)
-        if (c_associated(pt%{ptr_field})) then
+        if (c_associated(pt%owner)) then
+            ! view: storage lives inside the owner's Fortran object; drop our keep-alive ref
+            call Py_DecRef(pt%owner)
+        else if (c_associated(pt%{ptr_field})) then
             call c_f_pointer(pt%{ptr_field}, p)
             deallocate(p)
         end if

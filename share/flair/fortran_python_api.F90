@@ -329,6 +329,12 @@ module python_api_mod
             type(c_ptr) :: r
         end function
 
+        function PyObject_IsInstance(inst, cls) bind(C, name="PyObject_IsInstance") result(r)
+            import :: c_ptr, c_int
+            type(c_ptr), value :: inst, cls
+            integer(c_int) :: r
+        end function
+
         ! --- errors ---
         subroutine PyErr_SetString(exc, msg) bind(C, name="PyErr_SetString")
             import :: c_ptr

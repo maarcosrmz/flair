@@ -34,15 +34,51 @@ static constexpr char tpl_getset_numpy[] = {
 static constexpr char tpl_getset_numpy_ptr[] = {
 #embed "templates/getset_numpy_ptr.txt"
     , '\0'};
+static constexpr char tpl_getset_dtype[] = {
+#embed "templates/getset_dtype.txt"
+    , '\0'};
 static constexpr char tpl_method[] = {
 #embed "templates/method.txt"
     , '\0'};
 #pragma clang diagnostic pop
 
-sema::SymbolVector public_fields(dtype_info_t const &dt) {
+// Same-module wrapped derived type behind a component/dummy's declared type;
+// nullptr if `t` is not a derived type or not wrapped in this module.
+static sema::Symbol const *wrapped_dtype(sema::DeclTypeSpec const &t,
+                                         module_info_t const &m) {
+  str_t const dn = flu::derived_name(t);
+  if (dn.empty())
+    return nullptr;
+  auto const it = m.derived_types.find(dn);
+  return it != m.derived_types.end() ? it->second.ptr : nullptr;
+}
+
+sema::SymbolVector public_fields(dtype_info_t const &dt,
+                                 module_info_t const &m) {
   sema::SymbolVector out;
   for (auto const &sym : flu::public_components(*dt.ptr)) {
     auto const *t = sym->GetType();
+    if (str_t const dn = t != nullptr ? flu::derived_name(*t) : "";
+        !dn.empty()) {
+      if (wrapped_dtype(*t, m) == nullptr) {
+        flu::emit_error(*sym, "flair-f2py: cannot expose component '" +
+                                  sym->name().ToString() + "': derived type '" +
+                                  dn +
+                                  "' is not a wrapped type; property skipped");
+        continue;
+      }
+      if (flu::rank_of(sym) != 0 || flu::is_pointer(sym) ||
+          flu::is_allocatable(sym)) {
+        flu::emit_error(*sym,
+                        "flair-f2py: cannot expose component '" +
+                            sym->name().ToString() +
+                            "': only inline scalar derived-type components are "
+                            "supported; property skipped");
+        continue;
+      }
+      out.push_back(sym);
+      continue;
+    }
     if (t == nullptr || !intrinsic_supported(*t)) {
       // intrinsic real/integer only for now
       flu::emit_error(*sym, "flair-f2py: cannot expose component '" +
@@ -82,6 +118,7 @@ static str_t default_new_body(str_t const &pf) {
   b += "        call c_f_pointer(r, pt)\n";
   b += "        allocate(p)   ! component default-initializers apply here\n";
   b += fmt::format("        pt%{} = c_loc(p)\n", pf);
+  b += "        pt%owner = c_null_ptr\n";
   return b;
 }
 
@@ -94,19 +131,27 @@ static str_t ctor_new_body(str_t const &pf) {
   b += "        if (.not. c_associated(r)) return\n";
   b += "        call c_f_pointer(r, pt)\n";
   b += fmt::format("        pt%{} = c_null_ptr\n", pf);
+  b += "        pt%owner = c_null_ptr\n";
   return b;
 }
 
 // Local declarations shared by the two tp_init bodies: the kwarg scratch
 // pointer, one typed kw_<name> / logical got_<name> per accepted keyword, and
-// the scratch used by the unknown-keyword scan.
-static str_t
-arg_check_decls(std::vector<sema::Symbol const *> const &accepted) {
+// the scratch used by the unknown-keyword scan. A wrapped derived-type keyword
+// gets a wrapper-struct pointer (kwpt_<name>) plus a Fortran pointer kw_<name>.
+static str_t arg_check_decls(std::vector<sema::Symbol const *> const &accepted,
+                             module_info_t const &m) {
   str_t d;
   d += "        type(c_ptr) :: arg\n";
   for (sema::Symbol const *s : accepted) {
     str_t const nm = s->name().ToString();
-    d += fmt::format("        {} :: kw_{}\n", ftype(*s->GetType()), nm);
+    if (sema::Symbol const *sub = wrapped_dtype(*s->GetType(), m)) {
+      d += fmt::format("        type({}), pointer :: kwpt_{}\n",
+                       struct_name(*sub), nm);
+      d += fmt::format("        type({}), pointer :: kw_{}\n", tname(*sub), nm);
+    } else {
+      d += fmt::format("        {} :: kw_{}\n", ftype(*s->GetType()), nm);
+    }
     d += fmt::format("        logical :: got_{}\n", nm);
   }
   d += "        integer(c_ptrdiff_t) :: kw_pos\n";
@@ -122,7 +167,8 @@ arg_check_decls(std::vector<sema::Symbol const *> const &accepted) {
 // failure sets r = -1 and returns early; success falls through to the
 // template's trailing r = 0.
 static str_t arg_check_stmts(std::vector<sema::Symbol const *> const &accepted,
-                             str_t const &pyname, string_pool_t &strings) {
+                             module_info_t const &m, str_t const &pyname,
+                             string_pool_t &strings) {
   str_t b;
 
   // Reject positional arguments: tp_init is keyword-only here.
@@ -177,8 +223,30 @@ static str_t arg_check_stmts(std::vector<sema::Symbol const *> const &accepted,
         fmt::format("            arg = PyDict_GetItemString(kwds, c_loc({}))\n",
                     strings.intern(nm));
     b += "            if (c_associated(arg)) then\n";
-    b += fmt::format("                kw_{} = {}\n", nm,
-                     from_py(*s->GetType(), "arg"));
+    if (sema::Symbol const *sub = wrapped_dtype(*s->GetType(), m)) {
+      str_t const s_argtype =
+          strings.intern(pyname + "() argument '" + nm + "' must be a " +
+                         clsname(*sub) + " instance");
+      b += fmt::format("                if (PyObject_IsInstance(arg, "
+                       "py_{}_type_obj) /= 1) then\n",
+                       tname(*sub));
+      // IsInstance may return -1 with its own exception set; don't clobber it.
+      b += "                    if (.not. c_associated(PyErr_Occurred())) "
+           "then\n";
+      b += fmt::format("                        call "
+                       "PyErr_SetString(PyExc_TypeError, c_loc({}))\n",
+                       s_argtype);
+      b += "                    end if\n";
+      b += "                    r = -1\n";
+      b += "                    return\n";
+      b += "                end if\n";
+      b += fmt::format("                call c_f_pointer(arg, kwpt_{})\n", nm);
+      b += fmt::format("                call c_f_pointer(kwpt_{}%{}, kw_{})\n",
+                       nm, ptr_field(*sub), nm);
+    } else {
+      b += fmt::format("                kw_{} = {}\n", nm,
+                       from_py(*s->GetType(), "arg"));
+    }
     b += fmt::format("                got_{} = .true.\n", nm);
     b += "            end if\n";
   }
@@ -208,7 +276,7 @@ static str_t arg_check_stmts(std::vector<sema::Symbol const *> const &accepted,
 // pointer-returning constructor interface and stores the result.
 static str_t ctor_init_body(sema::Symbol const &tsym,
                             sema::SymbolVector const &fields,
-                            string_pool_t &strings) {
+                            module_info_t const &m, string_pool_t &strings) {
   std::vector<sema::Symbol const *> accepted;
   for (const sema::Symbol &f : fields)
     if (flu::rank_of(f) == 0)
@@ -219,12 +287,12 @@ static str_t ctor_init_body(sema::Symbol const &tsym,
   str_t b;
   b += fmt::format("        type({}), pointer :: pt\n", struct_name(tsym));
   b += fmt::format("        type({}), pointer :: p\n", tname(tsym));
-  b += arg_check_decls(accepted);
+  b += arg_check_decls(accepted, m);
   b += "\n";
 
   b += "        call c_f_pointer(self, pt)\n\n";
 
-  b += arg_check_stmts(accepted, pyname, strings);
+  b += arg_check_stmts(accepted, m, pyname, strings);
 
   str_t ctor_args;
   for (sema::Symbol const *f : accepted) {
@@ -242,7 +310,7 @@ static str_t ctor_init_body(sema::Symbol const &tsym,
 // the remaining intrinsic-typed dummies as kwargs, then calls the init
 // subroutine.
 static str_t init_init_body(sema::Symbol const &tsym, fnt_info_t const &init_fi,
-                            string_pool_t &strings) {
+                            module_info_t const &m, string_pool_t &strings) {
   auto const &sub = init_fi.ptr->get<sema::SubprogramDetails>();
   auto const &all = sub.dummyArgs();
 
@@ -257,8 +325,22 @@ static str_t init_init_body(sema::Symbol const &tsym, fnt_info_t const &init_fi,
     if (d == nullptr)
       continue;
     auto const *t = d->GetType();
-    if (t != nullptr && intrinsic_supported(*t))
+    if (t != nullptr && intrinsic_supported(*t)) {
       accepted.push_back(d);
+      continue;
+    }
+    // Inline scalar of a same-module wrapped derived type: unwrapped and passed
+    // by auto-deref. Pointer/allocatable dummies stay rejected — associating a
+    // user-held pointer with wrapper-owned storage has unmanageable lifetime.
+    if (t != nullptr && wrapped_dtype(*t, m) != nullptr &&
+        flu::rank_of(*d) == 0 && !flu::is_pointer(*d) &&
+        !flu::is_allocatable(*d)) {
+      accepted.push_back(d);
+      continue;
+    }
+    flu::emit_error(*d, "flair-f2py: cannot wrap init argument '" +
+                            d->name().ToString() +
+                            "': unsupported type; argument skipped");
   }
 
   str_t const pyname = tname(tsym);
@@ -266,13 +348,13 @@ static str_t init_init_body(sema::Symbol const &tsym, fnt_info_t const &init_fi,
   str_t b;
   b += fmt::format("        type({}), pointer :: pt\n", struct_name(tsym));
   b += fmt::format("        type({}), pointer :: p\n", tname(tsym));
-  b += arg_check_decls(accepted);
+  b += arg_check_decls(accepted, m);
   b += "\n";
 
   b += "        call c_f_pointer(self, pt)\n";
   b += fmt::format("        call c_f_pointer(pt%{}, p)\n\n", ptr_field(tsym));
 
-  b += arg_check_stmts(accepted, pyname, strings);
+  b += arg_check_stmts(accepted, m, pyname, strings);
 
   str_t call_args;
   for (sema::Symbol const *d : accepted) {
@@ -289,7 +371,7 @@ static str_t init_init_body(sema::Symbol const &tsym, fnt_info_t const &init_fi,
 }
 
 str_t gen_lifecycle(dtype_info_t const &dt, sema::SymbolVector const &fields,
-                    string_pool_t &strings) {
+                    module_info_t const &m, string_pool_t &strings) {
   sema::Symbol const &tsym = *dt.ptr;
   str_t const tn = tname(tsym);
   str_t const pf = ptr_field(tsym);
@@ -297,10 +379,10 @@ str_t gen_lifecycle(dtype_info_t const &dt, sema::SymbolVector const &fields,
   str_t new_body, init_body;
   if (dt.ctor.ptr != nullptr) {
     new_body = ctor_new_body(pf);
-    init_body = ctor_init_body(tsym, fields, strings);
+    init_body = ctor_init_body(tsym, fields, m, strings);
   } else if (dt.init.ptr != nullptr) {
     new_body = default_new_body(pf);
-    init_body = init_init_body(tsym, dt.init, strings);
+    init_body = init_init_body(tsym, dt.init, m, strings);
   } else {
     new_body = default_new_body(pf);
     init_body = "";
@@ -333,7 +415,8 @@ str_t gen_method(dtype_info_t const &dt, sema::Symbol const &binding,
 
   std::vector<sema::Symbol *> args = drop_self(sub.dummyArgs());
   str_t decls, fetch, call_args, cleanup;
-  if (!parse_args(args, m, "r = c_null_ptr", decls, fetch, call_args, &cleanup))
+  if (!parse_args(args, m, "r = c_null_ptr", decls, fetch, call_args, strings,
+                  &cleanup))
     return fmt::format("    ! TODO: unsupported argument(s): {}%{}\n\n", tn,
                        pyname);
 
@@ -365,7 +448,8 @@ str_t gen_method(dtype_info_t const &dt, sema::Symbol const &binding,
 }
 
 str_t gen_getset(dtype_info_t const &dt, sema::Symbol const &comp,
-                 string_pool_t &strings, str_t &fills, int &n) {
+                 module_info_t const &m, string_pool_t &strings, str_t &fills,
+                 int &n) {
   sema::Symbol const &tsym = *dt.ptr;
   str_t const tn = tname(tsym);
   str_t const field = comp.name().ToString();
@@ -377,6 +461,27 @@ str_t gen_getset(dtype_info_t const &dt, sema::Symbol const &comp,
 
   ++n;
   fills += getset_row(tn + "_getset", n, strings.intern(field), getter, setter);
+
+  // Guaranteed wrapped and inline-scalar: public_fields filters everything
+  // else.
+  if (sema::Symbol const *sub = wrapped_dtype(*t, m)) {
+    str_t const stn = tname(*sub);
+    return render(tpl_getset_dtype,
+                  {{"get_fn", getter},
+                   {"set_fn", setter},
+                   {"struct", struct_name(tsym)},
+                   {"tname", tn},
+                   {"ptr_field", ptr_field(tsym)},
+                   {"field", field},
+                   {"sub_struct", struct_name(*sub)},
+                   {"sub_tname", stn},
+                   {"sub_ptr_field", ptr_field(*sub)},
+                   {"type_obj", "py_" + stn + "_type_obj"},
+                   {"s_del", s_del},
+                   {"s_type", strings.intern(field + " must be a " +
+                                             clsname(*sub) + " instance")}}) +
+           "\n";
+  }
 
   if (flu::rank_of(comp) == 1) {
     if (flu::is_pointer(comp))
@@ -469,9 +574,14 @@ str_t create_fills(str_t const &tn, str_t const &cls, string_pool_t &strings) {
   s += fmt::format(
       "        rc = PyModule_AddObjectRef(mod_ptr, c_loc({}), type_ptr)\n",
       strings.intern(cls));
-  s += "        call Py_DecRef(type_ptr)\n";
-  s += "        if (rc < 0) then\n            call Py_DecRef(mod_ptr)\n        "
-       "    r = c_null_ptr\n            return\n        end if\n";
+  // The module keeps the type object reachable (and strongly referenced) for
+  // view getters (PyType_GenericAlloc) and isinstance checks.
+  s += fmt::format("        py_{}_type_obj = type_ptr\n", tn);
+  s += "        if (rc < 0) then\n";
+  s += "            call Py_DecRef(type_ptr)\n";
+  s += fmt::format("            py_{}_type_obj = c_null_ptr\n", tn);
+  s += "            call Py_DecRef(mod_ptr)\n            r = c_null_ptr\n      "
+       "      return\n        end if\n";
   return s;
 }
 
