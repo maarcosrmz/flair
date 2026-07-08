@@ -37,33 +37,27 @@ static constexpr char tpl_getset_numpy_ptr[] = {
 static constexpr char tpl_getset_dtype[] = {
 #embed "templates/getset_dtype.txt"
     , '\0'};
+static constexpr char tpl_getset_dtype_ext[] = {
+#embed "templates/getset_dtype_ext.txt"
+    , '\0'};
 static constexpr char tpl_method[] = {
 #embed "templates/method.txt"
     , '\0'};
 #pragma clang diagnostic pop
-
-// Same-module wrapped derived type behind a component/dummy's declared type;
-// nullptr if `t` is not a derived type or not wrapped in this module.
-static sema::Symbol const *wrapped_dtype(sema::DeclTypeSpec const &t,
-                                         module_info_t const &m) {
-  str_t const dn = flu::derived_name(t);
-  if (dn.empty())
-    return nullptr;
-  auto const it = m.derived_types.find(dn);
-  return it != m.derived_types.end() ? it->second.ptr : nullptr;
-}
 
 sema::SymbolVector public_fields(dtype_info_t const &dt,
                                  module_info_t const &m) {
   sema::SymbolVector out;
   for (auto const &sym : flu::public_components(*dt.ptr)) {
     auto const *t = sym->GetType();
-    if (str_t const dn = t != nullptr ? flu::derived_name(*t) : "";
-        !dn.empty()) {
-      if (wrapped_dtype(*t, m) == nullptr) {
+    if (auto const c =
+            t != nullptr ? classify_dtype(*t, m)
+                         : dtype_class_t{dtype_class::NotDerived, nullptr, {}};
+        c.cls != dtype_class::NotDerived) {
+      if (c.cls == dtype_class::Unsupported) {
         flu::emit_error(*sym, "flair-f2py: cannot expose component '" +
                                   sym->name().ToString() + "': derived type '" +
-                                  dn +
+                                  flu::derived_name(*t) +
                                   "' is not a wrapped type; property skipped");
         continue;
       }
@@ -137,18 +131,25 @@ static str_t ctor_new_body(str_t const &pf) {
 
 // Local declarations shared by the two tp_init bodies: the kwarg scratch
 // pointer, one typed kw_<name> / logical got_<name> per accepted keyword, and
-// the scratch used by the unknown-keyword scan. A wrapped derived-type keyword
-// gets a wrapper-struct pointer (kwpt_<name>) plus a Fortran pointer kw_<name>.
+// the scratch used by the unknown-keyword scan. A same-module derived-type
+// keyword gets a wrapper-struct pointer (kwpt_<name>) plus a Fortran pointer
+// kw_<name>; a foreign one only the Fortran pointer (unwrapped via the external
+// converter).
 static str_t arg_check_decls(std::vector<sema::Symbol const *> const &accepted,
                              module_info_t const &m) {
   str_t d;
   d += "        type(c_ptr) :: arg\n";
   for (sema::Symbol const *s : accepted) {
     str_t const nm = s->name().ToString();
-    if (sema::Symbol const *sub = wrapped_dtype(*s->GetType(), m)) {
+    if (auto const c = classify_dtype(*s->GetType(), m);
+        c.cls == dtype_class::Local) {
       d += fmt::format("        type({}), pointer :: kwpt_{}\n",
-                       struct_name(*sub), nm);
-      d += fmt::format("        type({}), pointer :: kw_{}\n", tname(*sub), nm);
+                       struct_name(*c.sym), nm);
+      d += fmt::format("        type({}), pointer :: kw_{}\n", tname(*c.sym),
+                       nm);
+    } else if (c.cls == dtype_class::Foreign) {
+      d += fmt::format("        type({}), pointer :: kw_{}\n", tname(*c.sym),
+                       nm);
     } else {
       d += fmt::format("        {} :: kw_{}\n", ftype(*s->GetType()), nm);
     }
@@ -223,13 +224,14 @@ static str_t arg_check_stmts(std::vector<sema::Symbol const *> const &accepted,
         fmt::format("            arg = PyDict_GetItemString(kwds, c_loc({}))\n",
                     strings.intern(nm));
     b += "            if (c_associated(arg)) then\n";
-    if (sema::Symbol const *sub = wrapped_dtype(*s->GetType(), m)) {
+    if (auto const c = classify_dtype(*s->GetType(), m);
+        c.cls == dtype_class::Local) {
       str_t const s_argtype =
           strings.intern(pyname + "() argument '" + nm + "' must be a " +
-                         clsname(*sub) + " instance");
+                         clsname(*c.sym) + " instance");
       b += fmt::format("                if (PyObject_IsInstance(arg, "
                        "py_{}_type_obj) /= 1) then\n",
-                       tname(*sub));
+                       tname(*c.sym));
       // IsInstance may return -1 with its own exception set; don't clobber it.
       b += "                    if (.not. c_associated(PyErr_Occurred())) "
            "then\n";
@@ -242,7 +244,17 @@ static str_t arg_check_stmts(std::vector<sema::Symbol const *> const &accepted,
       b += "                end if\n";
       b += fmt::format("                call c_f_pointer(arg, kwpt_{})\n", nm);
       b += fmt::format("                call c_f_pointer(kwpt_{}%{}, kw_{})\n",
-                       nm, ptr_field(*sub), nm);
+                       nm, ptr_field(*c.sym), nm);
+    } else if (c.cls == dtype_class::Foreign) {
+      // The external converter isinstance-checks and sets the exception; a
+      // disassociated result signals failure.
+      b += fmt::format("                kw_{} => {}(arg)\n", nm,
+                       from_pyobject_fn(tname(*c.sym)));
+      b += fmt::format("                if (.not. associated(kw_{})) then\n",
+                       nm);
+      b += "                    r = -1\n";
+      b += "                    return\n";
+      b += "                end if\n";
     } else {
       b += fmt::format("                kw_{} = {}\n", nm,
                        from_py(*s->GetType(), "arg"));
@@ -272,15 +284,58 @@ static str_t arg_check_stmts(std::vector<sema::Symbol const *> const &accepted,
   return b;
 }
 
-// tp_init for ctor case: parses public scalar fields as kwargs, then calls the
-// pointer-returning constructor interface and stores the result.
-static str_t ctor_init_body(sema::Symbol const &tsym,
-                            sema::SymbolVector const &fields,
-                            module_info_t const &m, string_pool_t &strings) {
+// A dummy usable as a keyword-only __init__ argument: an intrinsic scalar, or
+// an inline scalar of a wrapped (local or recordable-foreign) derived type.
+// Pointer/allocatable dummies are rejected — a plain kw_<name> local can't be
+// the actual for a pointer dummy, and associating a user-held pointer with
+// wrapper-owned storage has unmanageable lifetime anyway.
+static bool kwarg_supported(sema::Symbol const &d, module_info_t const &m,
+                            ext_types_t &ext_types) {
+  auto const *t = d.GetType();
+  if (t == nullptr)
+    return false;
+  if (flu::rank_of(d) != 0 || flu::is_pointer(d) || flu::is_allocatable(d))
+    return false;
+  if (intrinsic_supported(*t))
+    return true;
+  auto const c = classify_dtype(*t, m);
+  return c.cls == dtype_class::Local ||
+         (c.cls == dtype_class::Foreign && note_ext_type(ext_types, *c.sym));
+}
+
+bool ctor_kwargs(dtype_info_t const &dt, module_info_t const &m,
+                 ext_types_t &ext_types,
+                 std::vector<sema::Symbol const *> &out) {
+  sema::SymbolVector const specifics = flu::get_specific_procs(*dt.ctor.ptr);
+  if (specifics.size() != 1)
+    return false;
+  sema::Symbol const &spec = specifics.front();
+  if (!spec.has<sema::SubprogramDetails>())
+    return false;
+  auto const &sub = spec.get<sema::SubprogramDetails>();
+  if (!sub.isFunction())
+    return false;
+  // Every dummy is a real constructor argument (no passed-object to skip) and
+  // required for the generated call to compile, so one unsupported dummy makes
+  // the whole constructor -- and with it the type -- unwrappable.
+  for (sema::Symbol *d : sub.dummyArgs()) {
+    if (d == nullptr || !kwarg_supported(*d, m, ext_types))
+      return false;
+    out.push_back(d);
+  }
+  return true;
+}
+
+// tp_init for ctor case: parses the constructor specific's dummy args as
+// kwargs, then calls the pointer-returning constructor interface (keyed on the
+// dummy names, which is what generic resolution needs) and stores the result.
+static str_t ctor_init_body(dtype_info_t const &dt, module_info_t const &m,
+                            string_pool_t &strings, ext_types_t &ext_types) {
+  sema::Symbol const &tsym = *dt.ptr;
   std::vector<sema::Symbol const *> accepted;
-  for (const sema::Symbol &f : fields)
-    if (flu::rank_of(f) == 0)
-      accepted.push_back(&f);
+  // Cannot fail here: codegen_module's pre-pass already skipped types whose
+  // constructor is not wrappable.
+  ctor_kwargs(dt, m, ext_types, accepted);
 
   str_t const pyname = tname(tsym);
 
@@ -310,7 +365,8 @@ static str_t ctor_init_body(sema::Symbol const &tsym,
 // the remaining intrinsic-typed dummies as kwargs, then calls the init
 // subroutine.
 static str_t init_init_body(sema::Symbol const &tsym, fnt_info_t const &init_fi,
-                            module_info_t const &m, string_pool_t &strings) {
+                            module_info_t const &m, string_pool_t &strings,
+                            ext_types_t &ext_types) {
   auto const &sub = init_fi.ptr->get<sema::SubprogramDetails>();
   auto const &all = sub.dummyArgs();
 
@@ -324,17 +380,7 @@ static str_t init_init_body(sema::Symbol const &tsym, fnt_info_t const &init_fi,
     }
     if (d == nullptr)
       continue;
-    auto const *t = d->GetType();
-    if (t != nullptr && intrinsic_supported(*t)) {
-      accepted.push_back(d);
-      continue;
-    }
-    // Inline scalar of a same-module wrapped derived type: unwrapped and passed
-    // by auto-deref. Pointer/allocatable dummies stay rejected — associating a
-    // user-held pointer with wrapper-owned storage has unmanageable lifetime.
-    if (t != nullptr && wrapped_dtype(*t, m) != nullptr &&
-        flu::rank_of(*d) == 0 && !flu::is_pointer(*d) &&
-        !flu::is_allocatable(*d)) {
+    if (kwarg_supported(*d, m, ext_types)) {
       accepted.push_back(d);
       continue;
     }
@@ -370,8 +416,8 @@ static str_t init_init_body(sema::Symbol const &tsym, fnt_info_t const &init_fi,
   return b;
 }
 
-str_t gen_lifecycle(dtype_info_t const &dt, sema::SymbolVector const &fields,
-                    module_info_t const &m, string_pool_t &strings) {
+str_t gen_lifecycle(dtype_info_t const &dt, module_info_t const &m,
+                    string_pool_t &strings, ext_types_t &ext_types) {
   sema::Symbol const &tsym = *dt.ptr;
   str_t const tn = tname(tsym);
   str_t const pf = ptr_field(tsym);
@@ -379,10 +425,10 @@ str_t gen_lifecycle(dtype_info_t const &dt, sema::SymbolVector const &fields,
   str_t new_body, init_body;
   if (dt.ctor.ptr != nullptr) {
     new_body = ctor_new_body(pf);
-    init_body = ctor_init_body(tsym, fields, m, strings);
+    init_body = ctor_init_body(dt, m, strings, ext_types);
   } else if (dt.init.ptr != nullptr) {
     new_body = default_new_body(pf);
-    init_body = init_init_body(tsym, dt.init, m, strings);
+    init_body = init_init_body(tsym, dt.init, m, strings, ext_types);
   } else {
     new_body = default_new_body(pf);
     init_body = "";
@@ -402,7 +448,7 @@ str_t gen_lifecycle(dtype_info_t const &dt, sema::SymbolVector const &fields,
 
 str_t gen_method(dtype_info_t const &dt, sema::Symbol const &binding,
                  module_info_t const &m, string_pool_t &strings, str_t &fills,
-                 int &n) {
+                 int &n, ext_types_t &ext_types) {
   sema::Symbol const &tsym = *dt.ptr;
   sema::Symbol const *actual = flu::binding_actual(binding);
   if (actual == nullptr || !actual->has<sema::SubprogramDetails>())
@@ -416,7 +462,7 @@ str_t gen_method(dtype_info_t const &dt, sema::Symbol const &binding,
   std::vector<sema::Symbol *> args = drop_self(sub.dummyArgs());
   str_t decls, fetch, call_args, cleanup;
   if (!parse_args(args, m, "r = c_null_ptr", decls, fetch, call_args, strings,
-                  &cleanup))
+                  &cleanup, &ext_types))
     return fmt::format("    ! TODO: unsupported argument(s): {}%{}\n\n", tn,
                        pyname);
 
@@ -449,7 +495,7 @@ str_t gen_method(dtype_info_t const &dt, sema::Symbol const &binding,
 
 str_t gen_getset(dtype_info_t const &dt, sema::Symbol const &comp,
                  module_info_t const &m, string_pool_t &strings, str_t &fills,
-                 int &n) {
+                 int &n, ext_types_t &ext_types) {
   sema::Symbol const &tsym = *dt.ptr;
   str_t const tn = tname(tsym);
   str_t const field = comp.name().ToString();
@@ -459,13 +505,19 @@ str_t gen_getset(dtype_info_t const &dt, sema::Symbol const &comp,
   auto const *t =
       comp.GetType(); // non-null: public_fields only returns typed components
 
+  // Derived components are guaranteed wrapped (Local/Foreign) and inline
+  // scalar: public_fields filters everything else. Classify before emitting
+  // the table row so a non-recordable foreign type skips the property cleanly.
+  auto const c = classify_dtype(*t, m);
+  if (c.cls == dtype_class::Foreign && !note_ext_type(ext_types, *c.sym))
+    return fmt::format("    ! TODO: unsupported component: {}%{}\n\n", tn,
+                       field);
+
   ++n;
   fills += getset_row(tn + "_getset", n, strings.intern(field), getter, setter);
 
-  // Guaranteed wrapped and inline-scalar: public_fields filters everything
-  // else.
-  if (sema::Symbol const *sub = wrapped_dtype(*t, m)) {
-    str_t const stn = tname(*sub);
+  if (c.cls == dtype_class::Local) {
+    str_t const stn = tname(*c.sym);
     return render(tpl_getset_dtype,
                   {{"get_fn", getter},
                    {"set_fn", setter},
@@ -473,13 +525,28 @@ str_t gen_getset(dtype_info_t const &dt, sema::Symbol const &comp,
                    {"tname", tn},
                    {"ptr_field", ptr_field(tsym)},
                    {"field", field},
-                   {"sub_struct", struct_name(*sub)},
+                   {"sub_struct", struct_name(*c.sym)},
                    {"sub_tname", stn},
-                   {"sub_ptr_field", ptr_field(*sub)},
+                   {"sub_ptr_field", ptr_field(*c.sym)},
                    {"type_obj", "py_" + stn + "_type_obj"},
                    {"s_del", s_del},
                    {"s_type", strings.intern(field + " must be a " +
-                                             clsname(*sub) + " instance")}}) +
+                                             clsname(*c.sym) + " instance")}}) +
+           "\n";
+  }
+
+  if (c.cls == dtype_class::Foreign) {
+    str_t const stn = tname(*c.sym);
+    return render(tpl_getset_dtype_ext, {{"get_fn", getter},
+                                         {"set_fn", setter},
+                                         {"struct", struct_name(tsym)},
+                                         {"tname", tn},
+                                         {"ptr_field", ptr_field(tsym)},
+                                         {"field", field},
+                                         {"sub_tname", stn},
+                                         {"view_fn", view_pyobject_fn(stn)},
+                                         {"from_fn", from_pyobject_fn(stn)},
+                                         {"s_del", s_del}}) +
            "\n";
   }
 

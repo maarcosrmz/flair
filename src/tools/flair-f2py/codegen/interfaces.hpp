@@ -18,6 +18,6 @@ namespace codegen {
 str_t gen_interface_wrapper(
     Fortran::semantics::Symbol const &iface,
     std::vector<Fortran::semantics::Symbol const *> const &specifics,
-    module_info_t const &m, string_pool_t &strings, str_t *fills, int &n);
+    string_pool_t &strings, str_t *fills, int &n);
 
 } // namespace codegen

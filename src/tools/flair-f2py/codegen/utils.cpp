@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <utility>
 
 #include <fmt/core.h>
 #include <fmt/format.h>
@@ -10,11 +11,21 @@ namespace codegen {
 
 using namespace Fortran;
 
-static str_t lower(str_t s) {
+str_t fold_lower(str_t s) {
   std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
     return static_cast<char>(std::tolower(c));
   });
   return s;
+}
+
+static str_t lower(str_t s) { return fold_lower(std::move(s)); }
+
+str_t from_pyobject_fn(str_t const &type_name) {
+  return "FLAIR_" + fold_lower(type_name) + "_from_PyObject";
+}
+
+str_t view_pyobject_fn(str_t const &type_name) {
+  return "FLAIR_" + fold_lower(type_name) + "_view_PyObject";
 }
 
 bool ends_with(str_t const &s, str_t const &suf) {

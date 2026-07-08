@@ -1,5 +1,6 @@
 #pragma once
 
+#include <string>
 #include <vector>
 
 #include "flang/Common/reference.h"
@@ -28,5 +29,14 @@ bool is_allocatable(sema::Symbol const &sym);
 sema::SymbolVector public_components(sema::Symbol const &type_sym);
 
 sema::SymbolVector get_specific_procs(const sema::Symbol &iface_sym);
+
+// Source name of the module that encloses `sym`'s definition ("" if none).
+// Works across use-association, so a derived type reached through `use` still
+// reports its defining module.
+std::string owning_module_name(sema::Symbol const &sym);
+
+// True if `sym` is defined inside an intrinsic module (iso_c_binding,
+// ieee_arithmetic, __fortran_builtins, ...) rather than user code.
+bool in_intrinsic_module(sema::Symbol const &sym);
 
 } // namespace flu

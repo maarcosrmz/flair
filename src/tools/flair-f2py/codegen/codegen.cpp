@@ -8,6 +8,7 @@
 #include "flang/Semantics/symbol.h"
 
 #include "dtypes.hpp"
+#include "flu/diagnostics.hpp"
 #include "flu/symbols.hpp"
 #include "functions.hpp"
 #include "interfaces.hpp"
@@ -29,6 +30,8 @@ static constexpr char tpl_module[] = {
 #pragma clang diagnostic pop
 
 str_t module_pyname(str_t const &m) {
+  // TODO: Add command line arg to specify suffix to ignore
+  // e.g. in Octopus '_oct_m'
   if (ends_with(m, "_mod"))
     return m.substr(0, m.size() - 4);
   return m;
@@ -38,11 +41,39 @@ bool has_wrappable(module_info_t const &m) {
   return !m.derived_types.empty() || !m.functions.empty();
 }
 
-str_t codegen_module(module_info_t const &m) {
-  str_t const modpy = module_pyname(m.name);
+str_t codegen_module(module_info_t const &m_in) {
+  str_t const modpy = module_pyname(m_in.name);
   string_pool_t strings;
   std::set<sym_ptr_t>
-      bound; // type-bound actuals, excluded from module functions
+      bound;             // type-bound actuals, excluded from module functions
+  ext_types_t ext_types; // derived types wrapped elsewhere, referenced by this
+                         // module's procedures (folded name -> defining symbol)
+
+  // Local copy so unwrappable types can be dropped: everything downstream then
+  // classifies references to them as Unsupported (existing error+skip paths)
+  // instead of pointing at a type object / converters that are never generated.
+  module_info_t m = m_in;
+
+  // ---- validate constructors ------------------------------------------------
+  // A type whose ctor generic can't be wrapped faithfully (overloaded, or a
+  // specific with unsupported dummies) is skipped entirely: every ctor arg is
+  // required, so no correct __init__ can be generated for it.
+  for (auto it = m.derived_types.begin(); it != m.derived_types.end();) {
+    dtype_info_t const &dt = it->second;
+    std::vector<sema::Symbol const *> kwargs;
+    if (dt.ptr != nullptr && dt.ctor.ptr != nullptr &&
+        !ctor_kwargs(dt, m, ext_types, kwargs)) {
+      flu::emit_error(*dt.ptr,
+                      "flair-f2py: cannot wrap derived type '" + it->first +
+                          "': its constructor interface is not wrappable "
+                          "(overloaded or unsupported arguments); type skipped "
+                          "-- add !flair$ ignore to the type and its "
+                          "constructor interface");
+      it = m.derived_types.erase(it);
+    } else {
+      ++it;
+    }
+  }
 
   str_t structs, procedures, table_decls, pyinit_decls, pyinit_fills,
       pyinit_creates;
@@ -57,7 +88,7 @@ str_t codegen_module(module_info_t const &m) {
     structs += gen_object_struct(dt);
 
     sema::SymbolVector fields = public_fields(dt, m);
-    procedures += gen_lifecycle(dt, fields, m, strings) + "\n";
+    procedures += gen_lifecycle(dt, m, strings, ext_types) + "\n";
 
     str_t method_fills;
     int nm = 0;
@@ -66,14 +97,15 @@ str_t codegen_module(module_info_t const &m) {
         continue;
       if (auto const *act = flu::binding_actual(*mth.ptr))
         bound.insert(act);
-      procedures += gen_method(dt, *mth.ptr, m, strings, method_fills, nm);
+      procedures +=
+          gen_method(dt, *mth.ptr, m, strings, method_fills, nm, ext_types);
     }
     method_fills += method_sentinel(tn + "_methods", nm + 1);
 
     str_t getset_fills;
     int ng = 0;
     for (const sema::Symbol &f : fields)
-      procedures += gen_getset(dt, f, m, strings, getset_fills, ng);
+      procedures += gen_getset(dt, f, m, strings, getset_fills, ng, ext_types);
     getset_fills += getset_sentinel(tn + "_getset", ng + 1);
 
     table_decls +=
@@ -115,7 +147,8 @@ str_t codegen_module(module_info_t const &m) {
   for (auto const &fn : m.functions) {
     if (fn.ptr == nullptr || bound.count(fn.ptr))
       continue;
-    procedures += gen_module_function(*fn.ptr, m, strings, &modfn_fills, nmod);
+    procedures +=
+        gen_module_function(*fn.ptr, m, strings, &modfn_fills, nmod, ext_types);
   }
   for (auto const &iface : m.interfaces) {
     if (iface.ptr == nullptr /* TODO: or bound to dtype (?) */)
@@ -131,14 +164,15 @@ str_t codegen_module(module_info_t const &m) {
     std::vector<semantics::Symbol const *> generated;
     for (auto const &proc : specific_procs) {
       semantics::Symbol const &ps = proc;
-      str_t const w = gen_module_function(ps, m, strings, nullptr, nmod, gname);
+      str_t const w =
+          gen_module_function(ps, m, strings, nullptr, nmod, ext_types, gname);
       if (!w.empty()) {
         procedures += w;
         generated.push_back(&ps);
       }
     }
     // ...then the dispatching wrapper exposed under the generic's name.
-    procedures += gen_interface_wrapper(*iface.ptr, generated, m, strings,
+    procedures += gen_interface_wrapper(*iface.ptr, generated, strings,
                                         &modfn_fills, nmod);
   }
   modfn_fills += method_sentinel("module_methods", nmod + 1);
@@ -185,14 +219,121 @@ str_t codegen_module(module_info_t const &m) {
   pyinit += "        r = mod_ptr\n";
   pyinit += "    end function\n";
 
+  // ---- imports + converter interfaces for types wrapped in other files -----
+  // The only-import makes the foreign type name available for the interface
+  // blocks and wrapper locals regardless of the wrapped module's default
+  // accessibility. The converter bodies live in the file that wraps the
+  // defining module; the consumer .so must link against that producer (never
+  // duplicate its objects: each copy has its own type state, and the
+  // converters' not-initialized guard would then fire forever).
+  str_t imports, interfaces;
+  for (auto const &[n, tsym] : ext_types) {
+    imports += fmt::format("    use {}, only: {}\n",
+                           fold_lower(flu::owning_module_name(*tsym)), n);
+    interfaces += "    interface\n";
+    interfaces +=
+        fmt::format("        function {}(p) result(r)\n", from_pyobject_fn(n));
+    interfaces += "            import\n";
+    interfaces += "            type(c_ptr), value :: p\n";
+    interfaces += fmt::format("            type({}), pointer :: r\n", n);
+    interfaces += "        end function\n";
+    interfaces += fmt::format("        function {}(data, owner) result(r)\n",
+                              view_pyobject_fn(n));
+    interfaces += "            import\n";
+    interfaces += "            type(c_ptr), value :: data, owner\n";
+    interfaces += "            type(c_ptr) :: r\n";
+    interfaces += "        end function\n";
+    interfaces += "    end interface\n";
+  }
+
+  // ---- external converter definitions for this module's wrapped types ------
+  // from: isinstance-checked unwrap; sets the exception and returns a
+  //       disassociated pointer on failure.
+  // view: wraps a component address + owning PyObject into a new view instance
+  //       (numpy 'base' pattern; takes a reference on the owner).
+  // Both guard against the module not being initialized yet (its PyInit sets
+  // py_<t>_type_obj): the consumer module must be imported after this one.
+  str_t converters;
+  if (!m.derived_types.empty()) {
+    str_t const s_noinit =
+        strings.intern("python module '" + modpy +
+                       "' is not initialized; import it before "
+                       "using its wrapped types");
+    for (auto const &[name, dt] : m.derived_types) {
+      if (dt.ptr == nullptr)
+        continue;
+      semantics::Symbol const &tsym = *dt.ptr;
+      str_t const tn = tname(tsym);
+      str_t const s_type =
+          strings.intern("expected a " + clsname(tsym) + " instance");
+      str_t const guard = fmt::format("    if (.not. c_associated(py_{}_type_"
+                                      "obj)) then\n        call PyErr_SetString"
+                                      "(PyExc_RuntimeError, c_loc({}))\n       "
+                                      " return\n    end if\n",
+                                      tn, s_noinit);
+
+      converters +=
+          fmt::format("function {}(p) result(r)\n", from_pyobject_fn(tn));
+      converters += fmt::format("    use py_{}_mod\n", modpy);
+      converters += "    use iso_c_binding\n";
+      converters += "    implicit none\n";
+      converters += "    type(c_ptr), value :: p\n";
+      converters += fmt::format("    type({}), pointer :: r\n", tn);
+      converters +=
+          fmt::format("    type({}), pointer :: obj\n", struct_name(tsym));
+      converters += "    r => null()\n";
+      converters += guard;
+      converters +=
+          fmt::format("    if (PyObject_IsInstance(p, py_{}_type_obj) /= 1) "
+                      "then\n",
+                      tn);
+      converters += "        ! IsInstance may return -1 with its own exception "
+                    "set; don't clobber it\n";
+      converters += "        if (.not. c_associated(PyErr_Occurred())) then\n";
+      converters += fmt::format(
+          "            call PyErr_SetString(PyExc_TypeError, c_loc({}))\n",
+          s_type);
+      converters += "        end if\n";
+      converters += "        return\n";
+      converters += "    end if\n";
+      converters += "    call c_f_pointer(p, obj)\n";
+      converters +=
+          fmt::format("    call c_f_pointer(obj%{}, r)\n", ptr_field(tsym));
+      converters += "end function\n\n";
+
+      converters += fmt::format("function {}(data, owner) result(r)\n",
+                                view_pyobject_fn(tn));
+      converters += fmt::format("    use py_{}_mod\n", modpy);
+      converters += "    use iso_c_binding\n";
+      converters += "    implicit none\n";
+      converters += "    type(c_ptr), value :: data, owner\n";
+      converters += "    type(c_ptr) :: r\n";
+      converters +=
+          fmt::format("    type({}), pointer :: obj\n", struct_name(tsym));
+      converters += "    r = c_null_ptr\n";
+      converters += guard;
+      converters += fmt::format(
+          "    r = PyType_GenericAlloc(py_{}_type_obj, 0_c_ptrdiff_t)\n", tn);
+      converters += "    if (.not. c_associated(r)) return\n";
+      converters += "    call c_f_pointer(r, obj)\n";
+      converters += fmt::format("    obj%{} = data\n", ptr_field(tsym));
+      converters += "    obj%owner = owner\n";
+      converters += "    call Py_IncRef(owner)\n";
+      converters += "end function\n\n";
+    }
+  }
+
   return render(tpl_module, {
                                 {"modpy", modpy},
                                 {"wrapped_module", m.name},
+                                {"imports", imports},
                                 {"structs", structs},
                                 {"cstrings", strings.decls()},
                                 {"tables", table_decls},
+                                {"interfaces", interfaces},
                                 {"procedures", procedures},
                                 {"pyinit", pyinit},
+                                {"converters", converters},
                             });
 }
 

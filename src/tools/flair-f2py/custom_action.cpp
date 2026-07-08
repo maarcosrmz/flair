@@ -76,6 +76,7 @@ void custom_action::codegen() {
     std::ofstream(outfile) << codegen_module(mi);
     std::cout << "Generated " << outfile << std::endl;
   }
+  wdata->modules.clear();
 
   // TODO: Generation should fail if unsupported arguments are detected.
   // Method must be explicitly ignored with compiler directive `!flair$ ignore`

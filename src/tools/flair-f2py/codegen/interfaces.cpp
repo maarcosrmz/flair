@@ -68,8 +68,7 @@ struct cand_t {
 
 // Build the argument descriptor for a specific procedure, mirroring the
 // accept/reject rule in parse_args. Returns false if any dummy is unsupported.
-bool build_tags(semantics::Symbol const &spec, module_info_t const &m,
-                str_t const &modpy, std::vector<arg_tag_t> &out) {
+bool build_tags(semantics::Symbol const &spec, std::vector<arg_tag_t> &out) {
   if (!spec.has<semantics::SubprogramDetails>())
     return false;
   auto const &sub = spec.get<semantics::SubprogramDetails>();
@@ -80,12 +79,15 @@ bool build_tags(semantics::Symbol const &spec, module_info_t const &m,
     if (t == nullptr)
       return false;
     arg_tag_t tag;
-    if (str_t const dn = flu::derived_name(*t); !dn.empty()) {
-      auto it = m.derived_types.find(dn);
-      if (it == m.derived_types.end() || it->second.ptr == nullptr)
-        return false;
+    if (auto const *ds = t->AsDerived()) {
+      // The tp_name the object carries at runtime is set by the file that wraps
+      // the *defining* module, so key the discriminator on that module's python
+      // name (== `modpy` when the type is local), not the current one. This lets
+      // overloads on types wrapped in other files dispatch correctly.
+      semantics::Symbol const &tsym = ds->typeSymbol();
+      str_t const owner = module_pyname(flu::owning_module_name(tsym));
       tag.kind = arg_tag_t::Derived;
-      tag.derived = modpy + "." + clsname(*it->second.ptr);
+      tag.derived = owner + "." + clsname(tsym);
     } else if (flu::rank_of(*d) > 0 && intrinsic_supported(*t)) {
       tag.kind = arg_tag_t::Array;
       tag.npy = npy(*t);
@@ -123,15 +125,13 @@ str_t descriptor_key(std::vector<arg_tag_t> const &tags) {
 str_t gen_interface_wrapper(
     semantics::Symbol const &iface,
     std::vector<semantics::Symbol const *> const &specifics,
-    module_info_t const &m, string_pool_t &strings, str_t *fills, int &n) {
-  str_t const modpy = module_pyname(m.name);
-
+    string_pool_t &strings, str_t *fills, int &n) {
   // ---- candidates, collapsing kind-only overloads to the widest -----------
   std::vector<cand_t> uniq;
   std::map<str_t, size_t> seen; // descriptor key -> index into uniq
   for (semantics::Symbol const *s : specifics) {
     cand_t c{s, {}};
-    if (!build_tags(*s, m, modpy, c.tags))
+    if (!build_tags(*s, c.tags))
       continue;
     str_t const key = descriptor_key(c.tags);
     auto it = seen.find(key);

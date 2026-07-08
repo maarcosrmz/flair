@@ -26,16 +26,61 @@ static constexpr char tpl_module_function[] = {
     , '\0'};
 #pragma clang diagnostic pop
 
-// Look up a wrapped derived type by source name; nullptr if not wrapped.
-static sym_ptr_t wrapped_type(module_info_t const &m, str_t const &name) {
-  auto it = m.derived_types.find(name);
-  return it != m.derived_types.end() ? it->second.ptr : nullptr;
+dtype_class_t classify_dtype(semantics::DeclTypeSpec const &t,
+                             module_info_t const &m) {
+  auto const *ds = t.AsDerived();
+  if (ds == nullptr)
+    return {dtype_class::NotDerived, nullptr, {}};
+  semantics::Symbol const &tsym = ds->typeSymbol(); // defining symbol
+  for (auto const &[name, dt] : m.derived_types)
+    if (dt.ptr == &tsym)
+      return {dtype_class::Local, dt.ptr, m.name};
+  // Parameterized types can't be spelled as bare `type(t)` in the wrapper.
+  if (!ds->parameters().empty())
+    return {dtype_class::Unsupported, &tsym, {}};
+  str_t const owner = flu::owning_module_name(tsym);
+  // Intrinsic-module types (c_ptr & friends) have no wrapper anywhere; a type
+  // defined in `m` but not wrapped would reference converters that are never
+  // generated.
+  if (owner.empty() || owner[0] == '_' || flu::in_intrinsic_module(tsym) ||
+      owner == m.name)
+    return {dtype_class::Unsupported, &tsym, {}};
+  return {dtype_class::Foreign, &tsym, owner};
+}
+
+bool note_ext_type(ext_types_t &ext_types, semantics::Symbol const &tsym) {
+  str_t const n = tname(tsym);
+  if (view_pyobject_fn(n).size() > 63) {
+    flu::emit_error(tsym, "flair-f2py: derived type name '" + n +
+                              "' is too long for the external converter names "
+                              "(63-char identifier limit)");
+    return false;
+  }
+  auto const [it, inserted] = ext_types.emplace(n, &tsym);
+  if (!inserted) {
+    if (it->second != &tsym) {
+      // Same folded name, different type: the name-keyed FLAIR_* linker
+      // symbols of the two producers would collide.
+      flu::emit_error(tsym, "flair-f2py: derived type '" + n +
+                                "' collides with an equally named type from "
+                                "module '" +
+                                flu::owning_module_name(*it->second) + "'");
+      return false;
+    }
+    return true;
+  }
+  flu::emit_warning(tsym, "flair-f2py: derived type '" + n +
+                              "' is defined in module '" +
+                              flu::owning_module_name(tsym) +
+                              "'; its wrapper must be generated separately and "
+                              "linked with this one");
+  return true;
 }
 
 bool parse_args(std::vector<semantics::Symbol *> const &dummies,
                 module_info_t const &m, str_t const &fail_return, str_t &decls,
                 str_t &fetch, str_t &call_args, string_pool_t &strings,
-                str_t *cleanup) {
+                str_t *cleanup, ext_types_t *ext_types) {
   auto add_actual = [&](str_t const &actual) {
     if (!call_args.empty())
       call_args += ", ";
@@ -58,41 +103,54 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
                          " {}\n            return\n        end if\n",
                          obj, fail_return);
 
-    if (str_t const dn = flu::derived_name(*t); !dn.empty()) {
-      sym_ptr_t wt = wrapped_type(m, dn);
-      if (wt == nullptr) { // a type we don't wrap
-        // FIXME: if we don't wrap the type directly, add the interface to
-        // convert the argument from a PyObject to the respective fortran type
-        // (since we do not wrap types located in separate files)
+    if (auto const c = classify_dtype(*t, m);
+        c.cls != dtype_class::NotDerived) {
+      str_t const val = fmt::format("v{}", i);
+      if (c.cls == dtype_class::Local) {
+        str_t const s_argtype =
+            strings.intern("argument '" + d->name().ToString() +
+                           "' must be a " + clsname(*c.sym) + " instance");
+        decls += fmt::format("        type({}), pointer :: pt{}\n",
+                             struct_name(*c.sym), i);
+        decls += fmt::format("        type({}), pointer :: {}\n", tname(*c.sym),
+                             val);
+        fetch += fmt::format("        if (PyObject_IsInstance({}, "
+                             "py_{}_type_obj) /= 1) then\n",
+                             obj, tname(*c.sym));
+        // IsInstance may return -1 with its own exception set; don't clobber
+        // it.
+        fetch += "            if (.not. c_associated(PyErr_Occurred())) then\n";
+        fetch += fmt::format("                call "
+                             "PyErr_SetString(PyExc_TypeError, c_loc({}))\n",
+                             s_argtype);
+        fetch += "            end if\n";
+        fetch += fmt::format("            {}\n            return\n        end "
+                             "if\n",
+                             fail_return);
+        fetch += fmt::format("        call c_f_pointer({}, pt{})\n", obj, i);
+        fetch += fmt::format("        call c_f_pointer(pt{}%{}, {})\n", i,
+                             ptr_field(*c.sym), val);
+      } else if (c.cls == dtype_class::Foreign && ext_types != nullptr &&
+                 note_ext_type(*ext_types, *c.sym)) {
+        // Unwrap via the external converter emitted by the file that wraps the
+        // defining module. The converter isinstance-checks and sets the
+        // exception itself; a disassociated result signals failure. The
+        // returned pointer targets the same heap object the Python wrapper
+        // owns, so intent(out)/inout mutations propagate back for free.
+        str_t const n = tname(*c.sym);
+        decls += fmt::format("        type({}), pointer :: {}\n", n, val);
+        fetch += fmt::format("        {} => {}({})\n", val, from_pyobject_fn(n),
+                             obj);
+        fetch += fmt::format("        if (.not. associated({})) then\n         "
+                             "   {}\n            return\n        end if\n",
+                             val, fail_return);
+      } else {
         flu::emit_error(*d, "flair-f2py: cannot wrap argument '" +
                                 d->name().ToString() + "': derived type '" +
-                                dn +
+                                flu::derived_name(*t) +
                                 "' is not a wrapped type; procedure skipped");
         return false;
       }
-      str_t const val = fmt::format("v{}", i);
-      str_t const s_argtype =
-          strings.intern("argument '" + d->name().ToString() + "' must be a " +
-                         clsname(*wt) + " instance");
-      decls += fmt::format("        type({}), pointer :: pt{}\n",
-                           struct_name(*wt), i);
-      decls +=
-          fmt::format("        type({}), pointer :: {}\n", tname(*wt), val);
-      fetch += fmt::format("        if (PyObject_IsInstance({}, "
-                           "py_{}_type_obj) /= 1) then\n",
-                           obj, tname(*wt));
-      // IsInstance may return -1 with its own exception set; don't clobber it.
-      fetch += "            if (.not. c_associated(PyErr_Occurred())) then\n";
-      fetch += fmt::format(
-          "                call PyErr_SetString(PyExc_TypeError, c_loc({}))\n",
-          s_argtype);
-      fetch += "            end if\n";
-      fetch += fmt::format("            {}\n            return\n        end "
-                           "if\n",
-                           fail_return);
-      fetch += fmt::format("        call c_f_pointer({}, pt{})\n", obj, i);
-      fetch += fmt::format("        call c_f_pointer(pt{}%{}, {})\n", i,
-                           ptr_field(*wt), val);
       add_actual(val);
     } else if (flu::rank_of(*d) == 0 && intrinsic_supported(*t)) {
       // A primitive scalar is passed by value; an out/inout write cannot be
@@ -192,7 +250,7 @@ drop_self(std::vector<semantics::Symbol *> const &dummies) {
 
 str_t gen_module_function(semantics::Symbol const &fn, module_info_t const &m,
                           string_pool_t &strings, str_t *fills, int &n,
-                          str_t const &call_name) {
+                          ext_types_t &ext_types, str_t const &call_name) {
   if (!fn.has<semantics::SubprogramDetails>())
     return "";
   auto const &sub = fn.get<semantics::SubprogramDetails>();
@@ -203,7 +261,7 @@ str_t gen_module_function(semantics::Symbol const &fn, module_info_t const &m,
 
   str_t decls, fetch, call_args, cleanup;
   if (!parse_args(sub.dummyArgs(), m, "r = c_null_ptr", decls, fetch, call_args,
-                  strings, &cleanup))
+                  strings, &cleanup, &ext_types))
     return "";
 
   semantics::DeclTypeSpec const *rt =
