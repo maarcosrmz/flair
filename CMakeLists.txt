@@ -119,3 +119,7 @@ set(PYTHON_LIB_DEST_ROOT ${PYTHON_LIB_DEST_ROOT} CACHE PATH "Python library dest
 
 # Build flair components
 add_subdirectory(src)
+
+# Regression tests (pytest; see tests/README.md)
+enable_testing()
+add_subdirectory(tests)

@@ -1,0 +1,92 @@
+import gc
+import sys
+
+sys.path.insert(0, ".")
+import geom
+
+failures = []
+
+
+def check(name, cond):
+    print(("PASS" if cond else "FAIL"), name)
+    if not cond:
+        failures.append(name)
+
+
+# --- default-new type with defaults ---
+p = geom.Point_t()
+check("point defaults", p.x == 1.0 and p.y == 2.0)
+
+# --- ctor case with derived kwargs ---
+a = geom.Point_t()
+a.x = 10.0
+b = geom.Point_t()
+b.x = 20.0
+s = geom.Segment_t(id=7, a=a, b=b)
+check("ctor derived kwargs (deep copy)", s.id == 7 and s.a.x == 10.0 and s.b.x == 20.0)
+
+# ctor copies: mutating the original does not affect the segment
+a.x = -1.0
+check("ctor kwarg copied, not aliased", s.a.x == 10.0)
+
+# --- view semantics: mutation through the view is visible on re-get ---
+s.a.y = 42.0
+check("mutation through view visible", s.a.y == 42.0)
+
+v = s.a
+v.x = 11.0
+check("held view mutates parent", s.a.x == 11.0)
+
+# --- keep-alive: view outlives parent ---
+ref = sys.getrefcount(s)
+v2 = s.b
+check("view holds parent ref", sys.getrefcount(s) == ref + 1)
+del s
+gc.collect()
+check("view alive after parent deleted", v2.x == 20.0)
+del v, v2, ref
+gc.collect()
+
+# --- setter: copy-in, deep copy independence ---
+s2 = geom.Segment_t(id=1, a=geom.Point_t(), b=geom.Point_t())
+src = geom.Point_t()
+src.x = 99.0
+s2.a = src
+check("setter copies value", s2.a.x == 99.0)
+src.x = 0.0
+check("setter deep copy independent", s2.a.x == 99.0)
+
+# --- setter type error ---
+try:
+    s2.a = 3
+    check("setter type error", False)
+except TypeError as e:
+    check("setter type error", "must be a Point_t instance" in str(e))
+
+# --- ctor kwarg type error ---
+try:
+    geom.Segment_t(id=1, a=1, b=geom.Point_t())
+    check("ctor kwarg type error", False)
+except TypeError as e:
+    check("ctor kwarg type error", "must be a Point_t instance" in str(e))
+
+# --- self-assignment via a view of the same field (no corruption) ---
+s2.a = s2.a
+check("self-assignment safe", s2.a.x == 99.0)
+
+# --- init case: box_t_init with derived dummy ---
+box = geom.Box_t(corner=src, w=2.5)
+check("init derived kwarg", box.w == 2.5 and box.corner.x == 0.0)
+
+# --- delete guard ---
+try:
+    del s2.a
+    check("delete guard", False)
+except TypeError:
+    check("delete guard", True)
+
+print("---")
+if failures:
+    print("FAILURES:", failures)
+    sys.exit(1)
+print("all tests passed")
