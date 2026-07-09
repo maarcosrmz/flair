@@ -32,8 +32,10 @@ bool custom_action::initSemantics() {
   Fortran::frontend::CompilerInstance &Ci = getInstance();
 
   // If error after parsing, exit immediately
-  if (Ci.getDiagnostics().hasErrorOccurred())
+  if (Ci.getDiagnostics().hasErrorOccurred()) {
+    failed_ = true;
     return false;
+  }
 
   const std::optional<parse::Program> &ParseTree{Ci.getParsing().parseTree()};
   assert(ParseTree && "Cannot populate global scope without a parse tree!");

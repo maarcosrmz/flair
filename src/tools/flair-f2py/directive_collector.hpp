@@ -29,7 +29,7 @@ private:
 
   sema::SemanticsContext &context;
   std::set<std::string> types;
-  FlairDirective kind;
+  FlairDirective kind = NONE;
   bool first = false;
   bool inside_directive = false;
 
