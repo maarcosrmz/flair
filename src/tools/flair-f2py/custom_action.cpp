@@ -1,6 +1,8 @@
 #include <fstream>
 #include <iostream>
 #include <optional>
+#include <utility>
+#include <vector>
 
 #include "flang/Frontend/CompilerInstance.h"
 #include "flang/Parser/parse-tree-visitor.h"
@@ -64,24 +66,29 @@ void custom_action::traverseSemantics() {
   // Traverse global scope
   sema::Scope &root = context->globalScope();
   traverse_global_scope(root, wdata);
-  flu::flush_messages(*context, getInstance().getSemaOutputStream());
 }
 
 void custom_action::codegen() {
-  // Codegen: one py_<module>.F90 wrapper per module with wrappable entities.
+  std::vector<std::pair<std::string, std::string>> outputs;
   for (auto const &mi : wdata->modules) {
     if (not has_wrappable(mi))
       continue;
-    std::string const outfile = "py_" + module_pyname(mi.name) + ".F90";
-    std::ofstream(outfile) << codegen_module(mi);
-    std::cout << "Generated " << outfile << std::endl;
+    outputs.emplace_back("py_" + module_pyname(mi.name) + ".F90",
+                         codegen_module(mi));
   }
   wdata->modules.clear();
 
-  // TODO: Generation should fail if unsupported arguments are detected.
-  // Method must be explicitly ignored with compiler directive `!flair$ ignore`
+  if (context->messages().AnyFatalError(context->warningsAreErrors()))
+    failed_ = true;
 
   flu::flush_messages(*context, getInstance().getSemaOutputStream());
+
+  if (not failed_) {
+    for (auto const &[outfile, content] : outputs) {
+      std::ofstream(outfile) << content;
+      std::cout << "Generated " << outfile << std::endl;
+    }
+  }
 }
 
 void custom_action::executeAction() {

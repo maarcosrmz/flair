@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -54,8 +55,10 @@ int main(int argc, const char **argv) try {
   success = flang->executeAction(*act);
   flang->clearOutputFiles(true);
 
-  if (!success)
+  if (not success)
     throw std::runtime_error("Failed to run custom_action.");
+
+  return act->failed() ? EXIT_FAILURE : EXIT_SUCCESS;
 } catch (const std::exception &error) {
   std::cerr << error.what() << '\n';
   return EXIT_FAILURE;

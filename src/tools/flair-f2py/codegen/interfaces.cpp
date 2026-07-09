@@ -82,8 +82,8 @@ bool build_tags(semantics::Symbol const &spec, std::vector<arg_tag_t> &out) {
     if (auto const *ds = t->AsDerived()) {
       // The tp_name the object carries at runtime is set by the file that wraps
       // the *defining* module, so key the discriminator on that module's python
-      // name (== `modpy` when the type is local), not the current one. This lets
-      // overloads on types wrapped in other files dispatch correctly.
+      // name (== `modpy` when the type is local), not the current one. This
+      // lets overloads on types wrapped in other files dispatch correctly.
       semantics::Symbol const &tsym = ds->typeSymbol();
       str_t const owner = module_pyname(flu::owning_module_name(tsym));
       tag.kind = arg_tag_t::Derived;

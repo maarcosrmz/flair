@@ -53,7 +53,9 @@ bool note_ext_type(ext_types_t &ext_types, semantics::Symbol const &tsym) {
   if (view_pyobject_fn(n).size() > 63) {
     flu::emit_error(tsym, "flair-f2py: derived type name '" + n +
                               "' is too long for the external converter names "
-                              "(63-char identifier limit)");
+                              "(63-char identifier limit); annotate '" +
+                              n +
+                              "' with a '!flair$ ignore' directive to skip it");
     return false;
   }
   auto const [it, inserted] = ext_types.emplace(n, &tsym);
@@ -61,10 +63,12 @@ bool note_ext_type(ext_types_t &ext_types, semantics::Symbol const &tsym) {
     if (it->second != &tsym) {
       // Same folded name, different type: the name-keyed FLAIR_* linker
       // symbols of the two producers would collide.
-      flu::emit_error(tsym, "flair-f2py: derived type '" + n +
-                                "' collides with an equally named type from "
-                                "module '" +
-                                flu::owning_module_name(*it->second) + "'");
+      flu::emit_error(
+          tsym, "flair-f2py: derived type '" + n +
+                    "' collides with an equally named type from "
+                    "module '" +
+                    flu::owning_module_name(*it->second) + "'; annotate '" + n +
+                    "' with a '!flair$ ignore' directive to skip it");
       return false;
     }
     return true;
@@ -78,9 +82,12 @@ bool note_ext_type(ext_types_t &ext_types, semantics::Symbol const &tsym) {
 }
 
 bool parse_args(std::vector<semantics::Symbol *> const &dummies,
-                module_info_t const &m, str_t const &fail_return, str_t &decls,
-                str_t &fetch, str_t &call_args, string_pool_t &strings,
-                str_t *cleanup, ext_types_t *ext_types) {
+                module_info_t const &m, str_t const &owner_name,
+                str_t const &fail_return, str_t &decls, str_t &fetch,
+                str_t &call_args, string_pool_t &strings, str_t *cleanup,
+                ext_types_t *ext_types) {
+  str_t const ignore_hint = "; annotate '" + owner_name +
+                            "' with a '!flair$ ignore' directive to skip it";
   auto add_actual = [&](str_t const &actual) {
     if (!call_args.empty())
       call_args += ", ";
@@ -148,7 +155,7 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
         flu::emit_error(*d, "flair-f2py: cannot wrap argument '" +
                                 d->name().ToString() + "': derived type '" +
                                 flu::derived_name(*t) +
-                                "' is not a wrapped type; procedure skipped");
+                                "' is not a wrapped type" + ignore_hint);
         return false;
       }
       add_actual(val);
@@ -161,8 +168,8 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
             *d, "flair-f2py: cannot wrap scalar argument '" +
                     d->name().ToString() +
                     "' with intent(out)/intent(inout): primitive scalars are "
-                    "passed by value and cannot be written back; procedure "
-                    "skipped");
+                    "passed by value and cannot be written back" +
+                    ignore_hint);
         return false;
       }
       add_actual(from_py(*t, obj));
@@ -215,7 +222,7 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
     } else {
       flu::emit_error(*d, "flair-f2py: cannot wrap argument '" +
                               d->name().ToString() +
-                              "': unsupported type or rank; procedure skipped");
+                              "': unsupported type or rank" + ignore_hint);
       return false;
     }
     ++i;
@@ -260,15 +267,16 @@ str_t gen_module_function(semantics::Symbol const &fn, module_info_t const &m,
   str_t const callee = call_name.empty() ? pyname : call_name;
 
   str_t decls, fetch, call_args, cleanup;
-  if (!parse_args(sub.dummyArgs(), m, "r = c_null_ptr", decls, fetch, call_args,
-                  strings, &cleanup, &ext_types))
+  if (!parse_args(sub.dummyArgs(), m, pyname, "r = c_null_ptr", decls, fetch,
+                  call_args, strings, &cleanup, &ext_types))
     return "";
 
   semantics::DeclTypeSpec const *rt =
       sub.isFunction() ? sub.result().GetType() : nullptr;
   if (sub.isFunction() && (rt == nullptr || !intrinsic_supported(*rt))) {
     flu::emit_error(fn, "flair-f2py: cannot wrap function '" + pyname +
-                            "': unsupported result type; function skipped");
+                            "': unsupported result type; annotate '" + pyname +
+                            "' with a '!flair$ ignore' directive to skip it");
     return "";
   }
 

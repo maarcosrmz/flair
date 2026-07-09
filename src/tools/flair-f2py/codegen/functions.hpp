@@ -63,9 +63,13 @@ bool note_ext_type(ext_types_t &ext_types,
 // type is recorded so the module can emit the matching import + interface
 // block. With `ext_types` null, a Foreign derived type is an error (procedure
 // skipped).
+//
+// `owner_name` is the wrappable enclosing procedure (module function or method
+// binding); it is named in the "add '!flair$ ignore ...'" hint of any error.
 bool parse_args(std::vector<Fortran::semantics::Symbol *> const &dummies,
-                module_info_t const &m, str_t const &fail_return, str_t &decls,
-                str_t &fetch, str_t &call_args, string_pool_t &strings,
+                module_info_t const &m, str_t const &owner_name,
+                str_t const &fail_return, str_t &decls, str_t &fetch,
+                str_t &call_args, string_pool_t &strings,
                 str_t *cleanup = nullptr, ext_types_t *ext_types = nullptr);
 
 // Set `r` from a Fortran call: function result (rt != null) -> to_py;

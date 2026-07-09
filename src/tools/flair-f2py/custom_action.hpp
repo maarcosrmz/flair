@@ -14,11 +14,14 @@
 class custom_action : public Fortran::frontend::PrescanAndParseAction {
   std::shared_ptr<wdata_t> wdata;
   sema::SemanticsContext *context = nullptr;
+  bool failed_ = false; // a fatal codegen diagnostic aborted generation
 
 public:
   explicit custom_action() { wdata = std::make_shared<wdata_t>(); }
 
   void executeAction() override;
+
+  [[nodiscard]] bool failed() const { return failed_; }
 
 private:
   bool initSemantics();

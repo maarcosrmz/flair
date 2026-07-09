@@ -66,9 +66,11 @@ str_t codegen_module(module_info_t const &m_in) {
       flu::emit_error(*dt.ptr,
                       "flair-f2py: cannot wrap derived type '" + it->first +
                           "': its constructor interface is not wrappable "
-                          "(overloaded or unsupported arguments); type skipped "
-                          "-- add !flair$ ignore to the type and its "
-                          "constructor interface");
+                          "(overloaded or unsupported arguments); annotate the "
+                          "type '" +
+                          it->first +
+                          "' and its constructor interface with '!flair$ "
+                          "ignore' directives to skip it");
       it = m.derived_types.erase(it);
     } else {
       ++it;

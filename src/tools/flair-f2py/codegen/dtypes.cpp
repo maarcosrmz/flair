@@ -55,19 +55,20 @@ sema::SymbolVector public_fields(dtype_info_t const &dt,
                          : dtype_class_t{dtype_class::NotDerived, nullptr, {}};
         c.cls != dtype_class::NotDerived) {
       if (c.cls == dtype_class::Unsupported) {
-        flu::emit_error(*sym, "flair-f2py: cannot expose component '" +
-                                  sym->name().ToString() + "': derived type '" +
-                                  flu::derived_name(*t) +
-                                  "' is not a wrapped type; property skipped");
+        flu::emit_warning(*sym,
+                          "flair-f2py: cannot expose component '" +
+                              sym->name().ToString() + "': derived type '" +
+                              flu::derived_name(*t) +
+                              "' is not a wrapped type; property skipped");
         continue;
       }
       if (flu::rank_of(sym) != 0 || flu::is_pointer(sym) ||
           flu::is_allocatable(sym)) {
-        flu::emit_error(*sym,
-                        "flair-f2py: cannot expose component '" +
-                            sym->name().ToString() +
-                            "': only inline scalar derived-type components are "
-                            "supported; property skipped");
+        flu::emit_warning(
+            *sym, "flair-f2py: cannot expose component '" +
+                      sym->name().ToString() +
+                      "': only inline scalar derived-type components are "
+                      "supported; property skipped");
         continue;
       }
       out.push_back(sym);
@@ -75,9 +76,9 @@ sema::SymbolVector public_fields(dtype_info_t const &dt,
     }
     if (t == nullptr || !intrinsic_supported(*t)) {
       // intrinsic real/integer only for now
-      flu::emit_error(*sym, "flair-f2py: cannot expose component '" +
-                                sym->name().ToString() +
-                                "': unsupported type; property skipped");
+      flu::emit_warning(*sym, "flair-f2py: cannot expose component '" +
+                                  sym->name().ToString() +
+                                  "': unsupported type; property skipped");
       continue;
     }
     int const rank = flu::rank_of(sym);
@@ -90,10 +91,10 @@ sema::SymbolVector public_fields(dtype_info_t const &dt,
       out.push_back(sym);
       continue;
     }
-    flu::emit_error(*sym, "flair-f2py: cannot expose component '" +
-                              sym->name().ToString() +
-                              "': only scalars and rank-1 pointer/allocatable "
-                              "arrays are supported; property skipped");
+    flu::emit_warning(
+        *sym, "flair-f2py: cannot expose component '" + sym->name().ToString() +
+                  "': only scalars and rank-1 pointer/allocatable "
+                  "arrays are supported; property skipped");
   }
   return out;
 }
@@ -386,7 +387,9 @@ static str_t init_init_body(sema::Symbol const &tsym, fnt_info_t const &init_fi,
     }
     flu::emit_error(*d, "flair-f2py: cannot wrap init argument '" +
                             d->name().ToString() +
-                            "': unsupported type; argument skipped");
+                            "': unsupported type; annotate the initializer '" +
+                            init_fi.ptr->name().ToString() +
+                            "' with a '!flair$ ignore' directive to skip it");
   }
 
   str_t const pyname = tname(tsym);
@@ -461,17 +464,19 @@ str_t gen_method(dtype_info_t const &dt, sema::Symbol const &binding,
 
   std::vector<sema::Symbol *> args = drop_self(sub.dummyArgs());
   str_t decls, fetch, call_args, cleanup;
-  if (!parse_args(args, m, "r = c_null_ptr", decls, fetch, call_args, strings,
-                  &cleanup, &ext_types))
+  if (!parse_args(args, m, tn, "r = c_null_ptr", decls, fetch, call_args,
+                  strings, &cleanup, &ext_types))
     return fmt::format("    ! TODO: unsupported argument(s): {}%{}\n\n", tn,
                        pyname);
 
   sema::DeclTypeSpec const *rt =
       sub.isFunction() ? sub.result().GetType() : nullptr;
   if (sub.isFunction() && (rt == nullptr || !intrinsic_supported(*rt))) {
-    flu::emit_error(binding, "flair-f2py: cannot wrap method '" + tn + "%" +
-                                 pyname +
-                                 "': unsupported result type; method skipped");
+    flu::emit_error(binding,
+                    "flair-f2py: cannot wrap method '" + tn + "%" + pyname +
+                        "': unsupported result type; annotate the type '" + tn +
+                        "' with a '!flair$ ignore' directive to skip "
+                        "it");
     return fmt::format("    ! TODO: unsupported result type: {}%{}\n\n", tn,
                        pyname);
   }
