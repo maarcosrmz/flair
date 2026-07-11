@@ -1,6 +1,6 @@
 #include "codegen.hpp"
 
-#include <set>
+#include <unordered_set>
 
 #include <fmt/core.h>
 #include <fmt/format.h>
@@ -44,7 +44,7 @@ bool has_wrappable(module_info_t const &m) {
 str_t codegen_module(module_info_t const &m_in) {
   str_t const modpy = module_pyname(m_in.name);
   string_pool_t strings;
-  std::set<sym_ptr_t>
+  std::unordered_set<sym_ptr_t>
       bound;             // type-bound actuals, excluded from module functions
   ext_types_t ext_types; // derived types wrapped elsewhere, referenced by this
                          // module's procedures (folded name -> defining symbol)

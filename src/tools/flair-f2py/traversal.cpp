@@ -20,7 +20,7 @@ void traverse_module(sema::Symbol const &mod_sym, state &s);
 
 void traverse_global_scope(const sema::Scope &root,
                            std::shared_ptr<wdata_t> wdata) {
-  const std::set<std::string> &ignore = wdata->collector->ignore;
+  const std::unordered_set<std::string> &ignore = wdata->collector->ignore;
   for (auto const &[name, sym_ref] : root) {
     sema::Symbol const &sym = sym_ref.get();
     if (not sym.has<sema::ModuleDetails>() or
