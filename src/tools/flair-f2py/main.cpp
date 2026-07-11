@@ -41,6 +41,16 @@ int main(int argc, const char **argv) try {
   if (!success)
     throw std::runtime_error("Failed creating compiler invocation.");
 
+  {
+    auto &ppOpts = flang->getInvocation().getPreprocessorOpts();
+    auto &fortranOpts = flang->getInvocation().getFortranOpts();
+    for (auto const &dir : ppOpts.searchDirectoriesFromIntrModPath)
+      fortranOpts.intrinsicModuleDirectories.emplace_back(dir);
+    llvm::SmallString<128> defaultIntrDir("/usr/include/flang");
+    fortranOpts.intrinsicModuleDirectories.emplace_back(
+        std::string(defaultIntrDir));
+  }
+
   llvm::InitializeAllTargets();
   llvm::InitializeAllTargetMCs();
   llvm::InitializeAllAsmPrinters();

@@ -15,14 +15,18 @@
         integer(c_int) :: r
         type({struct}), pointer :: pt
         type({tname}), pointer :: p
+        {ctype} :: tmp
+        logical :: ok
         r = -1
         if (.not. c_associated(value)) then
             call PyErr_SetString(PyExc_TypeError, c_loc({s_del}))
             return
         end if
+        ! Convert before assigning so a failed set leaves the field untouched.
+        tmp = {helper}(value, ok)
+        if (.not. ok) return
         call c_f_pointer(self, pt)
         call c_f_pointer(pt%{ptr_field}, p)
-        p%{field} = {from_py_value}
-        if (c_associated(PyErr_Occurred())) return
+        p%{field} = {narrow_tmp}
         r = 0
     end function

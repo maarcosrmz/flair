@@ -172,7 +172,15 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
                     ignore_hint);
         return false;
       }
-      add_actual(from_py(*t, obj));
+      str_t const val = fmt::format("x{}", i);
+      decls += fmt::format("        {} :: {}\n", py_ctype(*t), val);
+      decls += fmt::format("        logical :: ok{}\n", i);
+      fetch += fmt::format("        {} = {}({}, ok{})\n", val, py_helper(*t),
+                           obj, i);
+      fetch += fmt::format("        if (.not. ok{}) then\n            {}\n     "
+                           "       return\n        end if\n",
+                           i, fail_return);
+      add_actual(narrow(*t, val));
     } else if (int const rr = flu::rank_of(*d);
                rr > 0 && intrinsic_supported(*t)) {
       // Intrinsic array: coerce to an F-contiguous numpy array of the exact

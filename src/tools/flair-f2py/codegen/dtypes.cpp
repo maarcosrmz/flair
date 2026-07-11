@@ -139,6 +139,7 @@ static str_t ctor_new_body(str_t const &pf) {
 static str_t arg_check_decls(std::vector<sema::Symbol const *> const &accepted,
                              module_info_t const &m) {
   str_t d;
+  bool any_intrinsic = false;
   d += "        type(c_ptr) :: arg\n";
   for (sema::Symbol const *s : accepted) {
     str_t const nm = s->name().ToString();
@@ -153,12 +154,20 @@ static str_t arg_check_decls(std::vector<sema::Symbol const *> const &accepted,
                        nm);
     } else {
       d += fmt::format("        {} :: kw_{}\n", ftype(*s->GetType()), nm);
+      any_intrinsic = true;
     }
     d += fmt::format("        logical :: got_{}\n", nm);
   }
   d += "        integer(c_ptrdiff_t) :: kw_pos\n";
   d += "        type(c_ptr) :: kw_key, kw_val, kw_msg\n";
   d += "        logical :: kw_known\n";
+  if (any_intrinsic) {
+    // Shared scratch for the checked intrinsic converters (one conversion is
+    // checked before the next starts, so a single set suffices).
+    d += "        real(c_double) :: kw_vr\n";
+    d += "        integer(c_long_long) :: kw_vi\n";
+    d += "        logical :: kw_ok\n";
+  }
   return d;
 }
 
@@ -257,8 +266,19 @@ static str_t arg_check_stmts(std::vector<sema::Symbol const *> const &accepted,
       b += "                    return\n";
       b += "                end if\n";
     } else {
-      b += fmt::format("                kw_{} = {}\n", nm,
-                       from_py(*s->GetType(), "arg"));
+      // Checked conversion into the shared scratch; on failure the helper
+      // leaves the Python exception pending.
+      auto const *t = s->GetType();
+      str_t const scratch =
+          flu::category(*t) == Fortran::common::TypeCategory::Real ? "kw_vr"
+                                                                   : "kw_vi";
+      b += fmt::format("                {} = {}(arg, kw_ok)\n", scratch,
+                       py_helper(*t));
+      b += "                if (.not. kw_ok) then\n";
+      b += "                    r = -1\n";
+      b += "                    return\n";
+      b += "                end if\n";
+      b += fmt::format("                kw_{} = {}\n", nm, narrow(*t, scratch));
     }
     b += fmt::format("                got_{} = .true.\n", nm);
     b += "            end if\n";
@@ -595,7 +615,9 @@ str_t gen_getset(dtype_info_t const &dt, sema::Symbol const &comp,
                                     {"ptr_field", ptr_field(tsym)},
                                     {"field", field},
                                     {"to_py_field", to_py(*t, "p%" + field)},
-                                    {"from_py_value", from_py(*t, "value")},
+                                    {"ctype", py_ctype(*t)},
+                                    {"helper", py_helper(*t)},
+                                    {"narrow_tmp", narrow(*t, "tmp")},
                                     {"s_del", s_del}}) +
          "\n";
 }

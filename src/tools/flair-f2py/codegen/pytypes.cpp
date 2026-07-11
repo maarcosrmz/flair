@@ -52,20 +52,46 @@ str_t to_py(Fortran::semantics::DeclTypeSpec const &t, str_t const &expr) {
   return "c_null_ptr";
 }
 
-str_t from_py(Fortran::semantics::DeclTypeSpec const &t, str_t const &obj) {
+str_t py_helper(Fortran::semantics::DeclTypeSpec const &t) {
   auto cat = flu::category(t);
   if (cat)
     switch (*cat) {
     case TypeCategory::Real:
-      return "real(PyFloat_AsDouble(" + obj + "), " +
-             std::to_string(flu::kind_of(t)) + ")";
+      return "FLAIR_double_from_PyObject";
     case TypeCategory::Integer:
-      return "int(PyLong_AsLongLong(" + obj + "), " +
-             std::to_string(flu::kind_of(t)) + ")";
+      return "FLAIR_int64_from_PyObject";
     default:
       break;
     }
-  return "0";
+  return "";
+}
+
+str_t py_ctype(Fortran::semantics::DeclTypeSpec const &t) {
+  auto cat = flu::category(t);
+  if (cat)
+    switch (*cat) {
+    case TypeCategory::Real:
+      return "real(c_double)";
+    case TypeCategory::Integer:
+      return "integer(c_long_long)";
+    default:
+      break;
+    }
+  return "";
+}
+
+str_t narrow(Fortran::semantics::DeclTypeSpec const &t, str_t const &var) {
+  auto cat = flu::category(t);
+  if (cat)
+    switch (*cat) {
+    case TypeCategory::Real:
+      return "real(" + var + ", " + std::to_string(flu::kind_of(t)) + ")";
+    case TypeCategory::Integer:
+      return "int(" + var + ", " + std::to_string(flu::kind_of(t)) + ")";
+    default:
+      break;
+    }
+  return var;
 }
 
 str_t ftype(Fortran::semantics::DeclTypeSpec const &t) {

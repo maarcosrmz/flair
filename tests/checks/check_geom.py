@@ -63,12 +63,29 @@ try:
 except TypeError as e:
     check("setter type error", "must be a Point_t instance" in str(e))
 
+# --- scalar setter type error leaves the field untouched ---
+pv = geom.Point_t()
+pv.x = 5.0
+try:
+    pv.x = "east"
+    check("scalar setter type error", False)
+except TypeError:
+    check("scalar setter type error", True)
+check("failed scalar set leaves field", pv.x == 5.0)
+
 # --- ctor kwarg type error ---
 try:
     geom.Segment_t(id=1, a=1, b=geom.Point_t())
     check("ctor kwarg type error", False)
 except TypeError as e:
     check("ctor kwarg type error", "must be a Point_t instance" in str(e))
+
+# --- ctor intrinsic kwarg type error ---
+try:
+    geom.Segment_t(id="seven", a=geom.Point_t(), b=geom.Point_t())
+    check("ctor intrinsic kwarg type error", False)
+except TypeError:
+    check("ctor intrinsic kwarg type error", True)
 
 # --- self-assignment via a view of the same field (no corruption) ---
 s2.a = s2.a

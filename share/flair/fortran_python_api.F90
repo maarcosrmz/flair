@@ -693,4 +693,28 @@ contains
         eq = transfer(a, 0_c_intptr_t) == transfer(b, 0_c_intptr_t)
     end function
 
+    ! ===== Safe argument converters for intrinsic scalars =====
+    ! Counterparts of the generated FLAIR_<dtype>_from_PyObject converters.
+    ! CPython reports conversion failure in-band (-1 result + pending
+    ! exception), so the result alone cannot carry the error; `ok` does.
+    ! On failure the exception set by the C API call is left pending and the
+    ! caller bails with its fail value. Precondition (as in C): no exception
+    ! pending on entry.
+
+    function FLAIR_double_from_PyObject(obj, ok) result(v)
+        type(c_ptr), value   :: obj
+        logical, intent(out) :: ok
+        real(c_double)       :: v
+        v = PyFloat_AsDouble(obj)
+        ok = .not. (v == -1.0_c_double .and. c_associated(PyErr_Occurred()))
+    end function
+
+    function FLAIR_int64_from_PyObject(obj, ok) result(v)
+        type(c_ptr), value   :: obj
+        logical, intent(out) :: ok
+        integer(c_long_long) :: v
+        v = PyLong_AsLongLong(obj)
+        ok = .not. (v == -1_c_long_long .and. c_associated(PyErr_Occurred()))
+    end function
+
 end module python_api_mod

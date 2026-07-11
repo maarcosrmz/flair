@@ -223,6 +223,8 @@ str_t gen_interface_wrapper(
     decls += "        integer(c_long_long) :: val_i\n";
   if (any_real)
     decls += "        real(c_double) :: val_r\n";
+  if (any_int || any_real)
+    decls += "        logical :: ok\n";
   if (any_array) {
     decls += "        integer(c_int) :: nd\n";
     decls += "        type(c_ptr) :: dsc\n";
@@ -274,16 +276,16 @@ str_t gen_interface_wrapper(
     auto prim = [&](str_t const &ind) {
       str_t s;
       if (ii && rr) {
-        s += fmt::format("{}val_i = PyLong_AsLongLong(a{})\n", ind, p);
-        s += fmt::format("{}if (.not. c_associated(PyErr_Occurred())) then\n",
-                         ind);
+        s += fmt::format("{}val_i = FLAIR_int64_from_PyObject(a{}, ok)\n", ind,
+                         p);
+        s += fmt::format("{}if (ok) then\n", ind);
         s += fmt::format("{}    tag{} = {}\n", ind, p,
                          code_kind(arg_tag_t::Int));
         s += fmt::format("{}else\n", ind);
         s += fmt::format("{}    call PyErr_Clear()\n", ind);
-        s += fmt::format("{}    val_r = PyFloat_AsDouble(a{})\n", ind, p);
-        s += fmt::format(
-            "{}    if (.not. c_associated(PyErr_Occurred())) then\n", ind);
+        s += fmt::format("{}    val_r = FLAIR_double_from_PyObject(a{}, ok)\n",
+                         ind, p);
+        s += fmt::format("{}    if (ok) then\n", ind);
         s += fmt::format("{}        tag{} = {}\n", ind, p,
                          code_kind(arg_tag_t::Real));
         s += fmt::format("{}    else\n", ind);
@@ -291,18 +293,18 @@ str_t gen_interface_wrapper(
         s += fmt::format("{}    end if\n", ind);
         s += fmt::format("{}end if\n", ind);
       } else if (ii) {
-        s += fmt::format("{}val_i = PyLong_AsLongLong(a{})\n", ind, p);
-        s += fmt::format("{}if (.not. c_associated(PyErr_Occurred())) then\n",
-                         ind);
+        s += fmt::format("{}val_i = FLAIR_int64_from_PyObject(a{}, ok)\n", ind,
+                         p);
+        s += fmt::format("{}if (ok) then\n", ind);
         s += fmt::format("{}    tag{} = {}\n", ind, p,
                          code_kind(arg_tag_t::Int));
         s += fmt::format("{}else\n", ind);
         s += fmt::format("{}    call PyErr_Clear()\n", ind);
         s += fmt::format("{}end if\n", ind);
       } else if (rr) {
-        s += fmt::format("{}val_r = PyFloat_AsDouble(a{})\n", ind, p);
-        s += fmt::format("{}if (.not. c_associated(PyErr_Occurred())) then\n",
-                         ind);
+        s += fmt::format("{}val_r = FLAIR_double_from_PyObject(a{}, ok)\n",
+                         ind, p);
+        s += fmt::format("{}if (ok) then\n", ind);
         s += fmt::format("{}    tag{} = {}\n", ind, p,
                          code_kind(arg_tag_t::Real));
         s += fmt::format("{}else\n", ind);

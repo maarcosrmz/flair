@@ -31,6 +31,25 @@ try:
 except TypeError:
     check("METH_NOARGS rejects argument", True)
 
+# conversion failures fail fast with the converter's own exception
+try:
+    scalars.add_d(1.5, "x")
+    check("real arg rejects str", False)
+except TypeError:
+    check("real arg rejects str", True)
+
+try:
+    scalars.addi(2, "x")
+    check("integer arg rejects str", False)
+except TypeError:
+    check("integer arg rejects str", True)
+
+try:
+    scalars.big_id(2**80)
+    check("oversized int overflows", False)
+except OverflowError:
+    check("oversized int overflows", True)
+
 print("---")
 if failures:
     print("FAILURES:", failures)
