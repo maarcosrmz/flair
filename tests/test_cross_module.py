@@ -35,3 +35,46 @@ def test_crossmod_args_and_dispatch(builder):
     assert "unexpected argument type for describe" in src
 
     b.run_check("check_crossmod.py")
+
+
+def test_scene_foreign_field_single_run(builder):
+    """Both fixtures in one invocation: USE'd modules resolve from source (no
+    .mod exists when flair-f2py runs), the cross-module converter wiring is
+    unchanged, and the separate-generation warning is gone because the
+    producer wrapper is emitted by the same run."""
+    b = builder.build_single_run(sources=["geom.f90", "scene.f90"])
+
+    assert "must be generated separately and linked" not in \
+        b.flair_results["scene.f90"].stderr
+
+    src = b.generated("scene")
+    assert "use geom_mod, only: point_t" in src
+    assert "FLAIR_point_t_from_PyObject" in src
+    assert "FLAIR_point_t_view_PyObject" in src
+
+    b.run_check("check_scene.py")
+
+
+def test_crossmod_args_and_dispatch_single_run(builder):
+    """Single-invocation variant of the crossmod case: wrappers for both
+    modules come out of one run and behave like the per-file builds."""
+    b = builder.build_single_run(sources=["vec_mod.F90", "ops_mod.F90"])
+
+    src = b.generated("ops")
+    assert "FLAIR_vec2_from_PyObject" in src
+    assert "py_mod_describe_vec" in src
+    assert "py_mod_describe_int" in src
+
+    b.run_check("check_crossmod.py")
+
+
+def test_crossmod_wrap_filter(builder):
+    """--wrap restricts wrapping to the designated inputs: dependencies are
+    resolved for their symbols only, and the separate-generation warning
+    stays because the producer wrapper is not part of this run."""
+    builder.add_sources("vec_mod.F90", "ops_mod.F90")
+    proc = builder.flair_all("vec_mod.F90", "ops_mod.F90", wrap=["ops_mod.F90"])
+
+    assert builder.generated_missing("vec")
+    assert "FLAIR_vec2_from_PyObject" in builder.generated("ops")
+    assert "must be generated separately and linked" in proc.stderr

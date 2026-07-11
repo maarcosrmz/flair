@@ -2,6 +2,8 @@
 #include <iostream>
 #include <memory>
 #include <stdexcept>
+#include <string_view>
+#include <vector>
 
 #include "flang/Frontend/CompilerInstance.h"
 #include "flang/Frontend/FrontendAction.h"
@@ -11,13 +13,50 @@
 #include "clang/Basic/DiagnosticOptions.h"
 #include "llvm/Support/TargetSelect.h"
 
+#include "compdb_driver.hpp"
 #include "custom_action.hpp"
 
 //====================   main    ==========================================
 
 int main(int argc, const char **argv) try {
 
-  // TODO: CMD line options, compilation database, logger, etc.
+  // Extract flair-specific options before Flang parses the command line
+  // (its option table rejects unknown flags). `--wrap <file>` (repeatable)
+  // restricts wrapping to the modules defined in the given input files; the
+  // remaining inputs are resolved for their symbols only. `--compdb <path>`
+  // together with `--entry <file>` switches to compilation-database mode.
+  std::vector<std::string> wrap_files;
+  std::string compdb_path;
+  std::string entry_file;
+  llvm::SmallVector<const char *, 256> args;
+  args.push_back(argv[0]);
+  for (int i = 1; i < argc; ++i) {
+    std::string_view const arg(argv[i]);
+    auto const option_value = [&](std::string_view opt) {
+      if (i + 1 == argc)
+        throw std::runtime_error(std::string(opt) + " requires an argument.");
+      return argv[++i];
+    };
+    if (arg == "--wrap")
+      wrap_files.emplace_back(option_value(arg));
+    else if (arg == "--compdb")
+      compdb_path = option_value(arg);
+    else if (arg == "--entry")
+      entry_file = option_value(arg);
+    else
+      args.push_back(argv[i]);
+  }
+
+  llvm::InitializeAllTargets();
+  llvm::InitializeAllTargetMCs();
+  llvm::InitializeAllAsmPrinters();
+
+  if (!compdb_path.empty() || !entry_file.empty()) {
+    if (compdb_path.empty() || entry_file.empty())
+      throw std::runtime_error("--compdb and --entry must be used together.");
+    return run_compdb_mode(compdb_path, entry_file, std::move(wrap_files),
+                           llvm::ArrayRef(args).slice(1), args[0]);
+  }
 
   // ------- main tool
 
@@ -35,7 +74,6 @@ int main(int argc, const char **argv) try {
   clang::DiagnosticsEngine diags(clang::DiagnosticIDs::create(), diagOpts,
                                  diagsBuffer.get(), /*ShouldOwnClient=*/false);
 
-  llvm::SmallVector<const char *, 256> args(argv, argv + argc);
   bool success = Fortran::frontend::CompilerInvocation::createFromArgs(
       flang->getInvocation(), llvm::ArrayRef(args).slice(1), diags, args[0]);
   if (!success)
@@ -51,10 +89,6 @@ int main(int argc, const char **argv) try {
         std::string(defaultIntrDir));
   }
 
-  llvm::InitializeAllTargets();
-  llvm::InitializeAllTargetMCs();
-  llvm::InitializeAllAsmPrinters();
-
   diagsBuffer->flushDiagnostics(flang->getDiagnostics());
 
   Fortran::parser::Options &fortran_opts =
@@ -62,6 +96,7 @@ int main(int argc, const char **argv) try {
   fortran_opts.compilerDirectiveSentinels.push_back(FLAIR_DIRECTIVE);
 
   auto act = std::make_unique<custom_action>();
+  act->set_wrap_files(std::move(wrap_files));
   success = flang->executeAction(*act);
   flang->clearOutputFiles(true);
 

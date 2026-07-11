@@ -48,6 +48,19 @@ dtype_class_t classify_dtype(semantics::DeclTypeSpec const &t,
   return {dtype_class::Foreign, &tsym, owner};
 }
 
+// Folded module name -> folded names of the types its wrapper converts,
+// for every wrapper this invocation generates.
+static std::map<str_t, std::set<str_t>> run_wrapped_types;
+
+void note_run_modules(std::vector<module_info_t> const &modules) {
+  run_wrapped_types.clear();
+  for (auto const &mi : modules) {
+    auto &types = run_wrapped_types[fold_lower(mi.name)];
+    for (auto const &[type_name, dt] : mi.derived_types)
+      types.insert(fold_lower(type_name));
+  }
+}
+
 bool note_ext_type(ext_types_t &ext_types, semantics::Symbol const &tsym) {
   str_t const n = tname(tsym);
   if (view_pyobject_fn(n).size() > 63) {
@@ -73,6 +86,12 @@ bool note_ext_type(ext_types_t &ext_types, semantics::Symbol const &tsym) {
     }
     return true;
   }
+  // The producer wrapper is emitted by this very invocation; nothing for the
+  // user to generate separately.
+  if (auto const run_it =
+          run_wrapped_types.find(fold_lower(flu::owning_module_name(tsym)));
+      run_it != run_wrapped_types.end() && run_it->second.count(n) != 0)
+    return true;
   flu::emit_warning(tsym, "flair-f2py: derived type '" + n +
                               "' is defined in module '" +
                               flu::owning_module_name(tsym) +

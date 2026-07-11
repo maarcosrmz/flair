@@ -1,10 +1,10 @@
 #include <flang/Semantics/symbol.h>
 #include <flang/Semantics/type.h>
 #include <llvm/ADT/STLExtras.h>
-#include <llvm/Support/CommandLine.h>
 
 #include <algorithm>
 
+#include "flu/paths.hpp"
 #include "flu/symbols.hpp"
 #include "traversal.hpp"
 
@@ -31,11 +31,16 @@ void traverse_module(sema::Symbol const &mod_sym, state &s);
 // ----------------------------
 
 void traverse_global_scope(const sema::Scope &root,
-                           std::shared_ptr<wdata_t> wdata) {
+                           std::shared_ptr<wdata_t> wdata,
+                           sema::SemanticsContext &context) {
   std::unordered_set<std::string> ignore = wdata->collector->ignore;
   // NOTE: ignore `!flair$ callback` annotated symbols for now
   ignore.insert(wdata->collector->callbacks.begin(),
                 wdata->collector->callbacks.end());
+
+  std::unordered_set<std::string> wrap_set;
+  for (auto const &f : wdata->wrap_files)
+    wrap_set.insert(flu::normalized_path(f));
 
   for (auto const &[name, sym_ref] : root) {
     sema::Symbol const &sym = sym_ref.get();
@@ -46,6 +51,15 @@ void traverse_global_scope(const sema::Scope &root,
     // Avoids transitive traversal of USEd modules.
     if (sym.test(sema::Symbol::Flag::ModFile))
       continue;
+
+    // With --wrap, only modules defined in the designated files are wrapped;
+    // the remaining inputs are resolved for their symbols only.
+    if (not wrap_set.empty()) {
+      auto const path = flu::defining_path(context, sym);
+      if (not path or
+          wrap_set.find(flu::normalized_path(*path)) == wrap_set.end())
+        continue;
+    }
 
     module_info_t mi(name.ToString());
     state s{mi, ignore, wdata->collector->instantiate};

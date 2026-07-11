@@ -160,6 +160,49 @@ class CaseBuilder:
             pytest.fail(f"flair-f2py failed on {name}:\n{_fmt(proc)}")
         return proc
 
+    def flair_compdb(self, compdb: str, entry: str,
+                     wrap: list[str] | None = None,
+                     expect_error: bool = False) -> subprocess.CompletedProcess:
+        """flair-f2py in compilation-database mode: the USE closure of
+        `entry` is discovered from compile_commands.json, each file parsed
+        with its own recorded flags, and the closure's modules wrapped
+        (restricted by --wrap when given)."""
+        cmd = [self.flair_bin, "--compdb", compdb, "--entry", entry]
+        if self.intrinsic_mod_dir is not None:
+            cmd += ["-fintrinsic-modules-path", self.intrinsic_mod_dir]
+        for w in wrap or []:
+            cmd += ["--wrap", w]
+        proc = self._run(cmd, check=False)
+        self.flair_results[entry] = proc
+        if expect_error and proc.returncode == 0:
+            pytest.fail(f"flair-f2py unexpectedly succeeded on {entry}:\n{_fmt(proc)}")
+        if not expect_error and proc.returncode != 0:
+            pytest.fail(f"flair-f2py failed on {entry}:\n{_fmt(proc)}")
+        return proc
+
+    def flair_all(self, *names: str, wrap: list[str] | None = None,
+                  expect_error: bool = False) -> subprocess.CompletedProcess:
+        """One flair-f2py invocation over several sources (dependency order).
+
+        USE'd modules are resolved from the sources of earlier inputs, so no
+        .mod files are needed. --wrap restricts which inputs get wrappers.
+        """
+        cmd = [self.flair_bin]
+        if self.intrinsic_mod_dir is not None:
+            cmd += ["-fintrinsic-modules-path", self.intrinsic_mod_dir]
+        for w in wrap or []:
+            cmd += ["--wrap", w]
+        proc = self._run([*cmd, *names], check=False)
+        for name in names:
+            self.flair_results[name] = proc
+        if expect_error and proc.returncode == 0:
+            pytest.fail(
+                f"flair-f2py unexpectedly succeeded on {' '.join(names)}:\n{_fmt(proc)}"
+            )
+        if not expect_error and proc.returncode != 0:
+            pytest.fail(f"flair-f2py failed on {' '.join(names)}:\n{_fmt(proc)}")
+        return proc
+
     def generated_path(self, mod: str) -> Path:
         return self.tmp / f"py_{mod}.F90"
 
@@ -212,6 +255,28 @@ class CaseBuilder:
             if self.generated_missing(mod):
                 pytest.fail(
                     f"flair-f2py exited 0 on {src} but wrote no py_{mod}.F90 "
+                    "and no diagnostic"
+                )
+            self.extension(mod, lib, *self._extensions)
+        return self
+
+    def build_single_run(self, sources: list[str], wrap: list[str] | None = None,
+                         lib: str = "case") -> "CaseBuilder":
+        """Like build, but with one flair-f2py invocation over all sources.
+
+        flair-f2py runs before anything is compiled, proving that USE'd
+        modules are resolved from source: no .mod file exists at that point.
+        """
+        self.add_sources(*sources)
+        self.flair_all(*sources, wrap=wrap)
+        self.compile(*sources)
+        objs = [Path(s).stem + ".o" for s in sources]
+        self.link_lib(lib, *objs)
+        for src in wrap or sources:
+            mod = pymod(src)
+            if self.generated_missing(mod):
+                pytest.fail(
+                    f"flair-f2py exited 0 but wrote no py_{mod}.F90 "
                     "and no diagnostic"
                 )
             self.extension(mod, lib, *self._extensions)

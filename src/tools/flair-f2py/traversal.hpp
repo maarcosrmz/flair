@@ -1,5 +1,6 @@
 #pragma once
 #include "flang/Semantics/scope.h"
+#include "flang/Semantics/semantics.h"
 #include "flang/Semantics/symbol.h"
 
 #include "wdata.hpp"
@@ -19,4 +20,5 @@ struct state {
 };
 
 void traverse_global_scope(sema::Scope const &global_scope,
-                           std::shared_ptr<wdata_t> wdata);
+                           std::shared_ptr<wdata_t> wdata,
+                           sema::SemanticsContext &context);

@@ -41,11 +41,17 @@ dtype_class_t classify_dtype(Fortran::semantics::DeclTypeSpec const &t,
 // '!flair$ instantiate'd procedure: positional dummy index -> type symbol.
 using poly_overrides_t = std::map<size_t, Fortran::semantics::Symbol const *>;
 
+// Record which modules (and their wrapped types) this invocation generates
+// wrappers for. note_ext_type consults this to skip the separate-generation
+// warning when the producer of a Foreign type is emitted by the same run.
+void note_run_modules(std::vector<module_info_t> const &modules);
+
 // Record a Foreign type for import/interface emission. False (with a real
 // diagnostic) when the folded name collides with a different type already
 // recorded (the name-keyed FLAIR_* linker symbols would collide) or the
 // converter name would exceed Fortran's 63-char identifier limit; warns once
-// per type that its defining module must be wrapped and linked separately.
+// per type that its defining module must be wrapped and linked separately
+// (unless that happens in this very run, see note_run_modules).
 bool note_ext_type(ext_types_t &ext_types,
                    Fortran::semantics::Symbol const &tsym);
 

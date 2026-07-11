@@ -62,5 +62,8 @@ struct wdata_t {
   std::vector<module_info_t> modules;
   std::unique_ptr<directive_collector> collector;
 
+  // Source files whose modules get wrapped (--wrap). Empty: wrap all inputs.
+  std::vector<str_t> wrap_files;
+
   explicit wdata_t() = default;
 };
