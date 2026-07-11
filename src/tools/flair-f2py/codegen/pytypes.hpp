@@ -16,8 +16,12 @@ using str_t = std::string;
 // otherwise.
 str_t npy(Fortran::semantics::DeclTypeSpec const &t);
 
-// real(4/8) or integer(1/2/4/8) -- the intrinsic scalar/element types we wrap.
+// The intrinsic *scalar* types we wrap: real(4/8), integer(1/2/4/8),
+// logical(1/2/4/8), default-kind character.
 bool intrinsic_supported(Fortran::semantics::DeclTypeSpec const &t);
+
+// The intrinsic *array element* types we wrap (== has a NumPy dtype).
+bool array_supported(Fortran::semantics::DeclTypeSpec const &t);
 
 // PyObject* (Fortran expression) from a Fortran value `expr`.
 str_t to_py(Fortran::semantics::DeclTypeSpec const &t, str_t const &expr);

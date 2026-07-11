@@ -167,6 +167,7 @@ module python_api_mod
     character(kind=c_char, len=20), target, save :: s_numpy_req    = "numpy not available"//c_null_char
     character(kind=c_char, len=40), target, save :: s_import_error = &
         "numpy._core.multiarray failed to import"//c_null_char
+    character(kind=c_char, len=16), target, save :: s_bool_req = "expected a bool"//c_null_char
 
     ! ===== C API interfaces =====
     interface
@@ -195,6 +196,13 @@ module python_api_mod
             import :: c_ptr, c_long_long
             type(c_ptr), value :: op
             integer(c_long_long) :: r
+        end function
+
+        ! --- bool ---
+        function PyBool_FromLong(v) bind(C, name="PyBool_FromLong") result(r)
+            import :: c_ptr, c_long
+            integer(c_long), value :: v
+            type(c_ptr) :: r
         end function
 
         ! --- tuple ---
@@ -252,6 +260,14 @@ module python_api_mod
                 bind(C, name="PyUnicode_FromString") result(r)
             import :: c_ptr
             type(c_ptr), value :: str   ! null-terminated UTF-8 C string
+            type(c_ptr) :: r
+        end function
+
+        function PyUnicode_FromStringAndSize(u, size) &
+                bind(C, name="PyUnicode_FromStringAndSize") result(r)
+            import :: c_ptr, c_ptrdiff_t
+            type(c_ptr),          value :: u   ! UTF-8 buffer, not null-terminated
+            integer(c_ptrdiff_t), value :: size
             type(c_ptr) :: r
         end function
 
@@ -715,6 +731,55 @@ contains
         integer(c_long_long) :: v
         v = PyLong_AsLongLong(obj)
         ok = .not. (v == -1_c_long_long .and. c_associated(PyErr_Occurred()))
+    end function
+
+    ! Strict: only True/False convert (bool is an int subclass, so a truthiness
+    ! or PyLong-based conversion would also accept integers). True and False
+    ! are singletons, so identity comparison is the exact-type check; unlike
+    ! the C API converters this sets the TypeError itself.
+    function FLAIR_logical_from_PyObject(obj, ok) result(v)
+        type(c_ptr), value   :: obj
+        logical, intent(out) :: ok
+        logical(c_bool)      :: v
+        v  = c_ptr_eq(obj, Py_GetConstant(Py_CONSTANT_TRUE))
+        ok = v .or. c_ptr_eq(obj, Py_GetConstant(Py_CONSTANT_FALSE))
+        if (.not. ok) call PyErr_SetString(PyExc_TypeError, c_loc(s_bool_req))
+    end function
+
+    ! UTF-8 bytes of a str, copied as-is into a Fortran string (multi-byte
+    ! sequences arrive as individual chars). Non-str raises TypeError inside
+    ! PyUnicode_AsUTF8AndSize.
+    function FLAIR_str_from_PyObject(obj, ok) result(v)
+        type(c_ptr), value        :: obj
+        logical, intent(out)      :: ok
+        character(:), allocatable :: v
+        type(c_ptr) :: cs
+        integer(c_ptrdiff_t) :: n, i
+        character(kind=c_char), pointer :: buf(:)
+        cs = PyUnicode_AsUTF8AndSize(obj, n)
+        ok = c_associated(cs)
+        if (.not. ok) then
+            v = ""
+            return
+        end if
+        allocate(character(len=n) :: v)
+        if (n > 0) then
+            call c_f_pointer(cs, buf, [n])
+            do i = 1, n
+                v(i:i) = buf(i)
+            end do
+        end if
+    end function
+
+    ! New str from a Fortran string interpreted as UTF-8; disassociated result
+    ! with the error pending if the bytes are not valid UTF-8.
+    function FLAIR_PyObject_from_str(s) result(r)
+        character(len=*), intent(in) :: s
+        type(c_ptr) :: r
+        ! max(1, ...): keep c_loc off a zero-size object; "" passes size 0.
+        character(kind=c_char, len=max(1, len(s))), target :: buf
+        buf = s
+        r = PyUnicode_FromStringAndSize(c_loc(buf), int(len(s), c_ptrdiff_t))
     end function
 
 end module python_api_mod

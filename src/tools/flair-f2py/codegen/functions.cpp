@@ -180,9 +180,29 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
       fetch += fmt::format("        if (.not. ok{}) then\n            {}\n     "
                            "       return\n        end if\n",
                            i, fail_return);
-      add_actual(narrow(*t, val));
+      if (auto const cl = flu::char_len(*t)) {
+        // Explicit-length character dummy: the actual must meet the declared
+        // length, so copy into a fixed local (blank-padding shorter strings)
+        // and reject longer ones instead of truncating silently.
+        str_t const fix = fmt::format("xf{}", i);
+        str_t const s_len = strings.intern(
+            fmt::format("argument '{}' exceeds character length {}",
+                        d->name().ToString(), *cl));
+        decls += fmt::format("        character({}) :: {}\n", *cl, fix);
+        fetch += fmt::format("        if (len({}) > {}) then\n", val, *cl);
+        fetch += fmt::format("            call PyErr_SetString(PyExc_"
+                             "ValueError, c_loc({}))\n",
+                             s_len);
+        fetch += fmt::format("            {}\n            return\n        end "
+                             "if\n",
+                             fail_return);
+        fetch += fmt::format("        {} = {}\n", fix, val);
+        add_actual(fix);
+      } else {
+        add_actual(narrow(*t, val));
+      }
     } else if (int const rr = flu::rank_of(*d);
-               rr > 0 && intrinsic_supported(*t)) {
+               rr > 0 && array_supported(*t)) {
       // Intrinsic array: coerce to an F-contiguous numpy array of the exact
       // dtype and point a Fortran array at its data. For intent(out)/inout the
       // WRITEBACKIFCOPY flag arranges any coercion copy to be flushed back into

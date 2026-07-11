@@ -73,6 +73,33 @@ except TypeError:
     check("scalar setter type error", True)
 check("failed scalar set leaves field", pv.x == 5.0)
 
+# --- character field: raw declared length, padded round-trip ---
+check("character field default", pv.name == "origin  ")
+pv.name = "north"
+check("character field round-trip", pv.name == "north   ")
+try:
+    pv.name = "northeast"  # 9 > len 8
+    check("oversized string set rejected", False)
+except ValueError:
+    check("oversized string set rejected", True)
+check("failed string set leaves field", pv.name == "north   ")
+try:
+    pv.name = 3
+    check("character setter type error", False)
+except TypeError:
+    check("character setter type error", True)
+
+# --- logical field: strict bool ---
+check("logical field default", pv.visible is True)
+pv.visible = False
+check("logical field round-trip", pv.visible is False)
+try:
+    pv.visible = 1
+    check("logical setter type error", False)
+except TypeError:
+    check("logical setter type error", True)
+check("failed logical set leaves field", pv.visible is False)
+
 # --- ctor kwarg type error ---
 try:
     geom.Segment_t(id=1, a=1, b=geom.Point_t())
@@ -92,8 +119,9 @@ s2.a = s2.a
 check("self-assignment safe", s2.a.x == 99.0)
 
 # --- init case: box_t_init with derived dummy ---
-box = geom.Box_t(corner=src, w=2.5)
+box = geom.Box_t(corner=src, w=2.5, label="crate")
 check("init derived kwarg", box.w == 2.5 and box.corner.x == 0.0)
+check("init character kwarg", box.label == "crate" + " " * 11)
 
 # --- delete guard ---
 try:

@@ -1,6 +1,7 @@
 #include "interfaces.hpp"
 
 #include <algorithm>
+#include <functional>
 #include <map>
 #include <utility>
 
@@ -38,11 +39,11 @@ namespace {
 // Fortran integer kind, so int32/int64 overloads collapse. Arrays keep their
 // numpy dtype + rank, both of which *are* visible at runtime.
 struct arg_tag_t {
-  enum kind_t { Int, Real, Derived, Array } kind;
+  enum kind_t { Int, Real, Bool, Str, Derived, Array } kind;
   str_t derived; // Derived: tp_name literal "<modpy>.<Class>"
   str_t npy;     // Array: numpy type code constant
   int rank = 0;  // Array: rank
-  int skind = 0; // Int/Real: Fortran kind (for widest-overload selection)
+  int skind = 0; // scalar: Fortran kind (for widest-overload selection)
 };
 
 // Stable per-position key, ignoring scalar kind, used for grouping overloads
@@ -53,6 +54,10 @@ str_t tag_key(arg_tag_t const &t) {
     return "i";
   case arg_tag_t::Real:
     return "r";
+  case arg_tag_t::Bool:
+    return "b";
+  case arg_tag_t::Str:
+    return "s";
   case arg_tag_t::Derived:
     return "d:" + t.derived;
   case arg_tag_t::Array:
@@ -88,15 +93,25 @@ bool build_tags(semantics::Symbol const &spec, std::vector<arg_tag_t> &out) {
       str_t const owner = module_pyname(flu::owning_module_name(tsym));
       tag.kind = arg_tag_t::Derived;
       tag.derived = owner + "." + clsname(tsym);
-    } else if (flu::rank_of(*d) > 0 && intrinsic_supported(*t)) {
+    } else if (flu::rank_of(*d) > 0 && array_supported(*t)) {
       tag.kind = arg_tag_t::Array;
       tag.npy = npy(*t);
       tag.rank = flu::rank_of(*d);
     } else if (flu::rank_of(*d) == 0 && intrinsic_supported(*t)) {
-      auto cat = flu::category(*t);
-      tag.kind = (cat && *cat == Fortran::common::TypeCategory::Real)
-                     ? arg_tag_t::Real
-                     : arg_tag_t::Int;
+      switch (*flu::category(*t)) {
+      case Fortran::common::TypeCategory::Real:
+        tag.kind = arg_tag_t::Real;
+        break;
+      case Fortran::common::TypeCategory::Logical:
+        tag.kind = arg_tag_t::Bool;
+        break;
+      case Fortran::common::TypeCategory::Character:
+        tag.kind = arg_tag_t::Str;
+        break;
+      default:
+        tag.kind = arg_tag_t::Int;
+        break;
+      }
       tag.skind = flu::kind_of(*t);
     } else {
       return false;
@@ -191,7 +206,7 @@ str_t gen_interface_wrapper(
   };
 
   bool any_derived = false, any_array = false, any_int = false,
-       any_real = false;
+       any_real = false, any_str = false;
   for (size_t p : disc)
     for (auto const &c : uniq)
       switch (c.tags[p].kind) {
@@ -207,6 +222,11 @@ str_t gen_interface_wrapper(
       case arg_tag_t::Real:
         any_real = true;
         break;
+      case arg_tag_t::Str:
+        any_str = true;
+        break;
+      case arg_tag_t::Bool: // identity test against the singletons; no locals
+        break;
       }
 
   // ---- declarations -------------------------------------------------------
@@ -215,9 +235,9 @@ str_t gen_interface_wrapper(
     decls += fmt::format("        type(c_ptr) :: a{}\n", p);
     decls += fmt::format("        integer :: tag{}\n", p);
   }
-  if (any_derived || any_array)
+  if (any_derived || any_array || any_str)
     decls += "        type(PyObject_t), pointer :: pyobj\n";
-  if (any_derived)
+  if (any_derived || any_str)
     decls += "        type(PyTypeObject_t), pointer :: pytype\n";
   if (any_int)
     decls += "        integer(c_long_long) :: val_i\n";
@@ -235,7 +255,7 @@ str_t gen_interface_wrapper(
   str_t cls;
   for (size_t p : disc) {
     // present tags at this position
-    bool d = false, a = false, ii = false, rr = false;
+    bool d = false, a = false, ii = false, rr = false, bb = false, ss = false;
     std::vector<arg_tag_t const *> derived_tags, array_tags;
     auto push_uniq = [](std::vector<arg_tag_t const *> &v, arg_tag_t const &t) {
       for (arg_tag_t const *e : v)
@@ -260,6 +280,12 @@ str_t gen_interface_wrapper(
       case arg_tag_t::Real:
         rr = true;
         break;
+      case arg_tag_t::Bool:
+        bb = true;
+        break;
+      case arg_tag_t::Str:
+        ss = true;
+        break;
       }
     }
 
@@ -269,56 +295,75 @@ str_t gen_interface_wrapper(
     cls += fmt::format("        if (c_associated(a{})) then\n", p);
     str_t const I = "            ";
 
-    if (d || a)
+    if (d || a || ss)
       cls += fmt::format("{}call c_f_pointer(a{}, pyobj)\n", I, p);
 
-    // primitive probe (integer-first), emitted as a reusable block
-    auto prim = [&](str_t const &ind) {
+    // Scalar probe chain, one nested block per present kind. Exact-type
+    // tests (bool identity, str tp_name) need no exception dance and come
+    // first; bool must precede the int probe because PyLong accepts
+    // True/False. Then int before real, as before. The str probe relies on
+    // pytype, set by derived_or_prim below.
+    enum probe_t { PBool, PStr, PInt, PReal };
+    std::vector<probe_t> probes;
+    if (bb)
+      probes.push_back(PBool);
+    if (ss)
+      probes.push_back(PStr);
+    if (ii)
+      probes.push_back(PInt);
+    if (rr)
+      probes.push_back(PReal);
+    std::function<str_t(size_t, str_t const &)> chain =
+        [&](size_t j, str_t const &ind) -> str_t {
+      if (j >= probes.size())
+        return "";
       str_t s;
-      if (ii && rr) {
-        s += fmt::format("{}val_i = FLAIR_int64_from_PyObject(a{}, ok)\n", ind,
-                         p);
+      switch (probes[j]) {
+      case PBool:
+      case PStr: {
+        str_t const cond =
+            probes[j] == PBool
+                ? fmt::format(
+                      "c_ptr_eq(a{0}, Py_GetConstant(Py_CONSTANT_TRUE)) .or. "
+                      "c_ptr_eq(a{0}, Py_GetConstant(Py_CONSTANT_FALSE))",
+                      p)
+                : str_t{"c_string_eq(pytype%tp_name, \"str\")"};
+        s += fmt::format("{}if ({}) then\n", ind, cond);
+        s += fmt::format(
+            "{}    tag{} = {}\n", ind, p,
+            code_kind(probes[j] == PBool ? arg_tag_t::Bool : arg_tag_t::Str));
+        if (str_t const rest = chain(j + 1, ind + "    "); !rest.empty()) {
+          s += fmt::format("{}else\n", ind);
+          s += rest;
+        }
+        s += fmt::format("{}end if\n", ind);
+        break;
+      }
+      case PInt:
+      case PReal: {
+        bool const is_int = probes[j] == PInt;
+        s += fmt::format("{}val_{} = FLAIR_{}_from_PyObject(a{}, ok)\n", ind,
+                         is_int ? "i" : "r", is_int ? "int64" : "double", p);
         s += fmt::format("{}if (ok) then\n", ind);
         s += fmt::format("{}    tag{} = {}\n", ind, p,
-                         code_kind(arg_tag_t::Int));
+                         code_kind(is_int ? arg_tag_t::Int : arg_tag_t::Real));
         s += fmt::format("{}else\n", ind);
         s += fmt::format("{}    call PyErr_Clear()\n", ind);
-        s += fmt::format("{}    val_r = FLAIR_double_from_PyObject(a{}, ok)\n",
-                         ind, p);
-        s += fmt::format("{}    if (ok) then\n", ind);
-        s += fmt::format("{}        tag{} = {}\n", ind, p,
-                         code_kind(arg_tag_t::Real));
-        s += fmt::format("{}    else\n", ind);
-        s += fmt::format("{}        call PyErr_Clear()\n", ind);
-        s += fmt::format("{}    end if\n", ind);
+        s += chain(j + 1, ind + "    ");
         s += fmt::format("{}end if\n", ind);
-      } else if (ii) {
-        s += fmt::format("{}val_i = FLAIR_int64_from_PyObject(a{}, ok)\n", ind,
-                         p);
-        s += fmt::format("{}if (ok) then\n", ind);
-        s += fmt::format("{}    tag{} = {}\n", ind, p,
-                         code_kind(arg_tag_t::Int));
-        s += fmt::format("{}else\n", ind);
-        s += fmt::format("{}    call PyErr_Clear()\n", ind);
-        s += fmt::format("{}end if\n", ind);
-      } else if (rr) {
-        s += fmt::format("{}val_r = FLAIR_double_from_PyObject(a{}, ok)\n",
-                         ind, p);
-        s += fmt::format("{}if (ok) then\n", ind);
-        s += fmt::format("{}    tag{} = {}\n", ind, p,
-                         code_kind(arg_tag_t::Real));
-        s += fmt::format("{}else\n", ind);
-        s += fmt::format("{}    call PyErr_Clear()\n", ind);
-        s += fmt::format("{}end if\n", ind);
+        break;
+      }
       }
       return s;
     };
+    auto prim = [&](str_t const &ind) { return chain(0, ind); };
 
     // derived / primitive block (no array)
     auto derived_or_prim = [&](str_t const &ind) {
       str_t s;
-      if (d) {
+      if (d || ss)
         s += fmt::format("{}call c_f_pointer(pyobj%ob_type, pytype)\n", ind);
+      if (d) {
         bool first = true;
         for (arg_tag_t const *t : derived_tags) {
           s += fmt::format("{}{} (c_string_eq(pytype%tp_name, \"{}\")) then\n",
@@ -326,7 +371,7 @@ str_t gen_interface_wrapper(
           s += fmt::format("{}    tag{} = {}\n", ind, p, code_of(*t));
           first = false;
         }
-        if (ii || rr) {
+        if (ii || rr || bb || ss) {
           s += fmt::format("{}else\n", ind);
           s += prim(ind + "    ");
         }

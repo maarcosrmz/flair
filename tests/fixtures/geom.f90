@@ -7,6 +7,8 @@ module geom_mod
     type :: point_t
         real(8) :: x = 1d0
         real(8) :: y = 2d0
+        character(8) :: name = "origin"
+        logical :: visible = .true.
         real(8), allocatable :: tags(:)
     end type
 
@@ -27,6 +29,7 @@ module geom_mod
     type :: box_t
         type(point_t) :: corner
         real(8) :: w = 0d0
+        character(16) :: label = ""
     end type
 
 contains
@@ -54,12 +57,14 @@ contains
         p%b = b
     end function
 
-    subroutine box_t_init(box, corner, w)
+    subroutine box_t_init(box, corner, w, label)
         type(box_t), intent(out) :: box
         type(point_t), intent(in) :: corner
         real(8), intent(in) :: w
+        character(*), intent(in) :: label   ! assumed-length kwarg
         box%corner = corner
         box%w = w
+        box%label = label
     end subroutine
 
 end module

@@ -25,4 +25,10 @@ assert (p.x, p.y) == (22.0, 44.0), (p.x, p.y)
 ops.describe(p)  # generic dispatch -> describe_vec
 ops.describe(7)  # generic dispatch -> describe_int
 
+# scalar dispatch across all four probe kinds; bool must win over int
+assert ops.tagof(7) == 1, ops.tagof(7)
+assert ops.tagof(1.5) == 2, ops.tagof(1.5)
+assert ops.tagof(True) == 3, ops.tagof(True)
+assert ops.tagof("x") == 4, ops.tagof("x")
+
 print("OK")

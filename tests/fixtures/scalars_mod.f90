@@ -41,4 +41,32 @@ contains
         a = 42
     end function
 
+    ! default-kind logical in and out
+    function toggle(b) result(nb)
+        logical, intent(in) :: b
+        logical :: nb
+        nb = .not. b
+    end function
+
+    ! logical(1) result: exercises kind conversion in the wrapper
+    function is_neg(x) result(b)
+        real(8), intent(in) :: x
+        logical(1) :: b
+        b = x < 0d0
+    end function
+
+    ! assumed-length character in, deferred-length result
+    function shout(s) result(t)
+        character(*), intent(in) :: s
+        character(:), allocatable :: t
+        t = trim(s)//"!"
+    end function
+
+    ! explicit-length character dummy and result
+    function first3(s) result(t)
+        character(3), intent(in) :: s
+        character(3) :: t
+        t = s
+    end function
+
 end module

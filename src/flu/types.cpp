@@ -1,5 +1,6 @@
 #include "flu/types.hpp"
 
+#include <flang/Evaluate/fold.h>
 #include <flang/Evaluate/type.h>
 #include <flang/Semantics/type.h>
 
@@ -22,6 +23,15 @@ int kind_of(semantics::DeclTypeSpec const &t) {
   if (!category(t))
     return 0;
   return evaluate::DynamicType::From(t)->kind();
+}
+
+std::optional<std::int64_t> char_len(semantics::DeclTypeSpec const &t) {
+  if (category(t) != common::TypeCategory::Character)
+    return std::nullopt;
+  semantics::ParamValue const &len = t.characterTypeSpec().length();
+  if (len.isAssumed() || len.isDeferred() || !len.GetExplicit())
+    return std::nullopt;
+  return evaluate::ToInt64(*len.GetExplicit());
 }
 
 std::string derived_name(semantics::DeclTypeSpec const &t) {

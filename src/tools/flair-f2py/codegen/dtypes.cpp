@@ -74,8 +74,7 @@ sema::SymbolVector public_fields(dtype_info_t const &dt,
       out.push_back(sym);
       continue;
     }
-    if (t == nullptr || !intrinsic_supported(*t)) {
-      // intrinsic real/integer only for now
+    if (t == nullptr) {
       flu::emit_warning(*sym, "flair-f2py: cannot expose component '" +
                                   sym->name().ToString() +
                                   "': unsupported type; property skipped");
@@ -83,11 +82,26 @@ sema::SymbolVector public_fields(dtype_info_t const &dt,
     }
     int const rank = flu::rank_of(sym);
     if (rank == 0) {
+      if (!intrinsic_supported(*t)) {
+        flu::emit_warning(*sym, "flair-f2py: cannot expose component '" +
+                                    sym->name().ToString() +
+                                    "': unsupported type; property skipped");
+        continue;
+      }
+      if (flu::is_pointer(sym) || flu::is_allocatable(sym)) {
+        flu::emit_warning(*sym,
+                          "flair-f2py: cannot expose component '" +
+                              sym->name().ToString() +
+                              "': only inline intrinsic scalar components are "
+                              "supported; property skipped");
+        continue;
+      }
       out.push_back(sym);
       continue;
     }
     // rank-1 arrays and allocatable/pointer for now
-    if (rank == 1 && (flu::is_allocatable(sym) || flu::is_pointer(sym))) {
+    if (rank == 1 && array_supported(*t) &&
+        (flu::is_allocatable(sym) || flu::is_pointer(sym))) {
       out.push_back(sym);
       continue;
     }
@@ -139,7 +153,8 @@ static str_t ctor_new_body(str_t const &pf) {
 static str_t arg_check_decls(std::vector<sema::Symbol const *> const &accepted,
                              module_info_t const &m) {
   str_t d;
-  bool any_intrinsic = false;
+  bool any_real = false, any_int = false, any_logical = false,
+       any_char = false;
   d += "        type(c_ptr) :: arg\n";
   for (sema::Symbol const *s : accepted) {
     str_t const nm = s->name().ToString();
@@ -154,20 +169,38 @@ static str_t arg_check_decls(std::vector<sema::Symbol const *> const &accepted,
                        nm);
     } else {
       d += fmt::format("        {} :: kw_{}\n", ftype(*s->GetType()), nm);
-      any_intrinsic = true;
+      switch (*flu::category(*s->GetType())) {
+      case Fortran::common::TypeCategory::Real:
+        any_real = true;
+        break;
+      case Fortran::common::TypeCategory::Logical:
+        any_logical = true;
+        break;
+      case Fortran::common::TypeCategory::Character:
+        any_char = true;
+        break;
+      default:
+        any_int = true;
+        break;
+      }
     }
     d += fmt::format("        logical :: got_{}\n", nm);
   }
   d += "        integer(c_ptrdiff_t) :: kw_pos\n";
   d += "        type(c_ptr) :: kw_key, kw_val, kw_msg\n";
   d += "        logical :: kw_known\n";
-  if (any_intrinsic) {
-    // Shared scratch for the checked intrinsic converters (one conversion is
-    // checked before the next starts, so a single set suffices).
+  // Shared scratch for the checked intrinsic converters (one conversion is
+  // checked before the next starts, so a single set suffices).
+  if (any_real)
     d += "        real(c_double) :: kw_vr\n";
+  if (any_int)
     d += "        integer(c_long_long) :: kw_vi\n";
+  if (any_logical)
+    d += "        logical(c_bool) :: kw_vl\n";
+  if (any_char)
+    d += "        character(:), allocatable :: kw_vc\n";
+  if (any_real || any_int || any_logical || any_char)
     d += "        logical :: kw_ok\n";
-  }
   return d;
 }
 
@@ -269,15 +302,41 @@ static str_t arg_check_stmts(std::vector<sema::Symbol const *> const &accepted,
       // Checked conversion into the shared scratch; on failure the helper
       // leaves the Python exception pending.
       auto const *t = s->GetType();
-      str_t const scratch =
-          flu::category(*t) == Fortran::common::TypeCategory::Real ? "kw_vr"
-                                                                   : "kw_vi";
+      str_t scratch;
+      switch (*flu::category(*t)) {
+      case Fortran::common::TypeCategory::Real:
+        scratch = "kw_vr";
+        break;
+      case Fortran::common::TypeCategory::Logical:
+        scratch = "kw_vl";
+        break;
+      case Fortran::common::TypeCategory::Character:
+        scratch = "kw_vc";
+        break;
+      default:
+        scratch = "kw_vi";
+        break;
+      }
       b += fmt::format("                {} = {}(arg, kw_ok)\n", scratch,
                        py_helper(*t));
       b += "                if (.not. kw_ok) then\n";
       b += "                    r = -1\n";
       b += "                    return\n";
       b += "                end if\n";
+      if (auto const cl = flu::char_len(*t)) {
+        // kw_<nm> is character(N): reject longer strings instead of letting
+        // the assignment truncate; shorter ones blank-pad.
+        str_t const s_len = strings.intern(
+            fmt::format("{}() argument '{}' exceeds character length {}",
+                        pyname, nm, *cl));
+        b += fmt::format("                if (len(kw_vc) > {}) then\n", *cl);
+        b += fmt::format("                    call PyErr_SetString(PyExc_"
+                         "ValueError, c_loc({}))\n",
+                         s_len);
+        b += "                    r = -1\n";
+        b += "                    return\n";
+        b += "                end if\n";
+      }
       b += fmt::format("                kw_{} = {}\n", nm, narrow(*t, scratch));
     }
     b += fmt::format("                got_{} = .true.\n", nm);
@@ -608,6 +667,19 @@ str_t gen_getset(dtype_info_t const &dt, sema::Symbol const &comp,
            "\n";
   }
 
+  // character(N) fields reject longer strings instead of letting the
+  // assignment truncate; shorter ones blank-pad (r = -1 is already set).
+  str_t check;
+  if (auto const cl = flu::char_len(*t)) {
+    str_t const s_len = strings.intern(
+        fmt::format("{} exceeds character length {}", field, *cl));
+    check += fmt::format("        if (len(tmp) > {}) then\n", *cl);
+    check += fmt::format(
+        "            call PyErr_SetString(PyExc_ValueError, c_loc({}))\n",
+        s_len);
+    check += "            return\n";
+    check += "        end if\n";
+  }
   return render(tpl_getset_scalar, {{"get_fn", getter},
                                     {"set_fn", setter},
                                     {"struct", struct_name(tsym)},
@@ -618,6 +690,7 @@ str_t gen_getset(dtype_info_t const &dt, sema::Symbol const &comp,
                                     {"ctype", py_ctype(*t)},
                                     {"helper", py_helper(*t)},
                                     {"narrow_tmp", narrow(*t, "tmp")},
+                                    {"check", check},
                                     {"s_del", s_del}}) +
          "\n";
 }

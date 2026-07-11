@@ -50,6 +50,34 @@ try:
 except OverflowError:
     check("oversized int overflows", True)
 
+# logical: strict bool in, bool out
+check("logical round-trip", scalars.toggle(True) is False)
+check("logical(1) result", scalars.is_neg(-2.0) is True)
+
+try:
+    scalars.toggle(1)
+    check("logical arg rejects int", False)
+except TypeError:
+    check("logical arg rejects int", True)
+
+# character: assumed-length arg, deferred-length result
+check("character round-trip", scalars.shout("hey") == "hey!")
+
+try:
+    scalars.shout(3)
+    check("character arg rejects int", False)
+except TypeError:
+    check("character arg rejects int", True)
+
+# explicit-length dummy: shorter pads, longer raises
+check("character pads to dummy length", scalars.first3("ab") == "ab ")
+
+try:
+    scalars.first3("abcd")
+    check("oversized string rejected", False)
+except ValueError:
+    check("oversized string rejected", True)
+
 print("---")
 if failures:
     print("FAILURES:", failures)

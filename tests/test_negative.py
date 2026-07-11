@@ -1,5 +1,5 @@
 """Negative and diagnostic cases: skipped fields (warn only), unwrappable
-constructors, intrinsic-module arguments, and string arguments (abort)."""
+constructors, intrinsic-module arguments, and string array arguments (abort)."""
 
 import re
 
@@ -49,13 +49,14 @@ def test_intrinsic_module_arg_aborts(builder):
     assert builder.generated_missing("cptr_arg")
 
 
-def test_string_arg_aborts(builder):
-    """Pins that character arguments are currently unwrappable: flair must
-    abort instead of silently emitting broken marshalling code."""
+def test_string_array_arg_aborts(builder):
+    """Pins that character arrays (unlike character scalars) are currently
+    unwrappable: flair must abort instead of silently emitting broken
+    marshalling code."""
     builder.add_sources("strarg_mod.f90")
     builder.compile("strarg_mod.f90")
 
     proc = builder.flair("strarg_mod.f90", expect_error=True)
-    assert "cannot wrap argument 'name'" in proc.stderr
+    assert "cannot wrap argument 'names'" in proc.stderr
     assert "unsupported type or rank" in proc.stderr
     assert builder.generated_missing("strarg")
