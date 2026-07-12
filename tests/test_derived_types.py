@@ -34,8 +34,10 @@ def test_geom(builder):
     # keyword-only __init__: positional args rejected with TypeError
     assert "takes no positional arguments" in src
 
-    # ctor paths: generic interface called by name; <type>_init subroutine
+    # ctor paths: generic interface called by name (pointer- and
+    # value-returning specifics); <type>_init subroutine
     assert re.search(r"p => segment_t\(id=", src)
+    assert re.search(r"p = circle_t\(r=", src)
     assert re.search(r"call box_t_init\(p,", src)
 
     # derived-type kwarg/setter type errors carry the class name

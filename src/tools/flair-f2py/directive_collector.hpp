@@ -45,7 +45,14 @@ public:
   void Post(const parse::CompilerDirective &cd);
   bool Pre(const parse::Name &name);
   void Post(const parse::Name &name);
+  // Declarations whose first parse::Name in tree order is not the declared
+  // entity (a function's result-type prefix, a type's extends(...) attribute)
+  // attach a pending directive to the entity name explicitly.
+  bool Pre(const parse::FunctionStmt &stmt);
+  bool Pre(const parse::DerivedTypeStmt &stmt);
 
 private:
+  void attach(const parse::Name &name);
+
   static std::string directive_sentinel(const parse::CharBlock &body);
 };

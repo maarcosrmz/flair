@@ -90,8 +90,19 @@ bool note_ext_type(ext_types_t &ext_types, semantics::Symbol const &tsym) {
   // user to generate separately.
   if (auto const run_it =
           run_wrapped_types.find(fold_lower(flu::owning_module_name(tsym)));
-      run_it != run_wrapped_types.end() && run_it->second.count(n) != 0)
-    return true;
+      run_it != run_wrapped_types.end()) {
+    if (run_it->second.count(n) != 0)
+      return true;
+    // The owning module's wrapper is emitted by this very invocation but skips
+    // the type (e.g. '!flair$ ignore'): its converter will never exist, so a
+    // reference would only fail later, when the extension is loaded.
+    flu::emit_error(tsym, "flair-f2py: derived type '" + n +
+                              "' is skipped by the wrapper of its module '" +
+                              flu::owning_module_name(tsym) +
+                              "', so no converter for it exists");
+    ext_types.erase(n);
+    return false;
+  }
   flu::emit_warning(tsym, "flair-f2py: derived type '" + n +
                               "' is defined in module '" +
                               flu::owning_module_name(tsym) +
@@ -120,6 +131,14 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
     auto const *t = d->GetType();
     if (t == nullptr)
       return false;
+    // The wrapper's locals (value copies and pointers) cannot legally be the
+    // actual for an ALLOCATABLE dummy.
+    if (flu::is_allocatable(*d)) {
+      flu::emit_error(*d, "flair-f2py: cannot wrap argument '" +
+                              d->name().ToString() + "': allocatable dummy" +
+                              ignore_hint);
+      return false;
+    }
     str_t const obj = fmt::format("a{}", i);
 
     decls += fmt::format("        type(c_ptr) :: {}\n", obj);
@@ -332,7 +351,10 @@ str_t gen_module_function(semantics::Symbol const &fn, module_info_t const &m,
 
   semantics::DeclTypeSpec const *rt =
       sub.isFunction() ? sub.result().GetType() : nullptr;
-  if (sub.isFunction() && (rt == nullptr || !intrinsic_supported(*rt))) {
+  // Only scalar results have a Python conversion; array-valued functions
+  // would silently pass a rank-1 expression to the scalar converter.
+  if (sub.isFunction() && (rt == nullptr || !intrinsic_supported(*rt) ||
+                           sub.result().Rank() != 0)) {
     flu::emit_error(fn, "flair-f2py: cannot wrap function '" + pyname +
                             "': unsupported result type; annotate '" + pyname +
                             "' with a '!flair$ ignore' directive to skip it");

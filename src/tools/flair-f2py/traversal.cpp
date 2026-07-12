@@ -11,6 +11,7 @@
 // --- state ---
 bool state::ignore(sema::Symbol const &sym) {
   return ignored.find(sym.name().ToString()) != ignored.end() or
+         sym.attrs().test(sema::Attr::PRIVATE) or
          (default_private and not sym.attrs().test(sema::Attr::PUBLIC));
 }
 
@@ -79,6 +80,9 @@ void traverse_module(sema::Symbol const &mod_sym, state &s) {
       return;
     if (not sym.has<sema::SubprogramDetails>())
       return;
+    // An abstract interface declares a shape, not a callable procedure.
+    if (sym.attrs().test(sema::Attr::ABSTRACT))
+      return;
 
     fnt_info_t fi{&sym, false, nullptr, s.instantiate_types(sym)};
     if (auto dt = get_dtype_of_initializer(sym, s.mi))
@@ -92,6 +96,10 @@ void traverse_module(sema::Symbol const &mod_sym, state &s) {
     if (s.ignore(sym))
       return;
     if (not sym.has<sema::GenericDetails>())
+      return;
+    // Defined operators and assignment generics have no Python-callable name
+    // (and may carry use-associated builtin specifics, e.g. c_ptr comparison).
+    if (not sym.get<sema::GenericDetails>().kind().IsName())
       return;
 
     iface_info_t iface{&sym};

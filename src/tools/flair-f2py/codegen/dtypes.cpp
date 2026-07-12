@@ -414,8 +414,10 @@ bool ctor_kwargs(dtype_info_t const &dt, module_info_t const &m,
 }
 
 // tp_init for ctor case: parses the constructor specific's dummy args as
-// kwargs, then calls the pointer-returning constructor interface (keyed on the
-// dummy names, which is what generic resolution needs) and stores the result.
+// kwargs, then calls the constructor interface (keyed on the dummy names,
+// which is what generic resolution needs) and stores the result. A
+// pointer-returning specific hands over its target; a value-returning one is
+// assigned into wrapper-allocated storage.
 static str_t ctor_init_body(dtype_info_t const &dt, module_info_t const &m,
                             string_pool_t &strings, ext_types_t &ext_types) {
   sema::Symbol const &tsym = *dt.ptr;
@@ -423,6 +425,13 @@ static str_t ctor_init_body(dtype_info_t const &dt, module_info_t const &m,
   // Cannot fail here: codegen_module's pre-pass already skipped types whose
   // constructor is not wrappable.
   ctor_kwargs(dt, m, ext_types, accepted);
+  bool const ptr_result = flu::get_specific_procs(*dt.ctor.ptr)
+                              .front()
+                              .get()
+                              .get<sema::SubprogramDetails>()
+                              .result()
+                              .attrs()
+                              .test(sema::Attr::POINTER);
 
   str_t const pyname = tname(tsym);
 
@@ -443,7 +452,12 @@ static str_t ctor_init_body(dtype_info_t const &dt, module_info_t const &m,
     str_t const nm = f->name().ToString();
     ctor_args += nm + "=kw_" + nm;
   }
-  b += fmt::format("        p => {}({})\n", tname(tsym), ctor_args);
+  if (ptr_result) {
+    b += fmt::format("        p => {}({})\n", tname(tsym), ctor_args);
+  } else {
+    b += "        allocate(p)\n";
+    b += fmt::format("        p = {}({})\n", tname(tsym), ctor_args);
+  }
   b += fmt::format("        pt%{} = c_loc(p)\n", ptr_field(tsym));
   return b;
 }
@@ -527,9 +541,11 @@ str_t gen_lifecycle(dtype_info_t const &dt, module_info_t const &m,
                                    {"tname", tn},
                                    {"struct", struct_name(tsym)},
                                    {"ptr_field", pf},
-                                   {"new_fn", "py_" + tn + "_new"},
-                                   {"init_fn", "py_" + tn + "_init"},
-                                   {"dealloc_fn", "py_" + tn + "_dealloc"},
+                                   // tp_-prefixed so a type-bound procedure
+                                   // named init/new/dealloc cannot collide
+                                   {"new_fn", "py_" + tn + "_tp_new"},
+                                   {"init_fn", "py_" + tn + "_tp_init"},
+                                   {"dealloc_fn", "py_" + tn + "_tp_dealloc"},
                                    {"new_body", new_body},
                                    {"init_body", init_body},
                                });
@@ -561,7 +577,8 @@ str_t gen_method(dtype_info_t const &dt, sema::Symbol const &binding,
 
   sema::DeclTypeSpec const *rt =
       sub.isFunction() ? sub.result().GetType() : nullptr;
-  if (sub.isFunction() && (rt == nullptr || !intrinsic_supported(*rt))) {
+  if (sub.isFunction() && (rt == nullptr || !intrinsic_supported(*rt) ||
+                           sub.result().Rank() != 0)) {
     flu::emit_error(binding,
                     "flair-f2py: cannot wrap method '" + tn + "%" + pyname +
                         "': unsupported result type; annotate the type '" + tn +
@@ -719,11 +736,11 @@ str_t slot_fills(str_t const &tn) {
     s += fmt::format("        {0}({1})%pfunc = {2}\n", sl, idx, pfunc);
   };
   slot(1, "Py_tp_new",
-       fmt::format("transfer(c_funloc(py_{}_new), c_null_ptr)", tn));
+       fmt::format("transfer(c_funloc(py_{}_tp_new), c_null_ptr)", tn));
   slot(2, "Py_tp_init",
-       fmt::format("transfer(c_funloc(py_{}_init), c_null_ptr)", tn));
+       fmt::format("transfer(c_funloc(py_{}_tp_init), c_null_ptr)", tn));
   slot(3, "Py_tp_dealloc",
-       fmt::format("transfer(c_funloc(py_{}_dealloc), c_null_ptr)", tn));
+       fmt::format("transfer(c_funloc(py_{}_tp_dealloc), c_null_ptr)", tn));
   slot(4, "Py_tp_methods", fmt::format("c_loc({}(1))", mt));
   slot(5, "Py_tp_getset", fmt::format("c_loc({}(1))", gt));
   slot(6, "0", "c_null_ptr");

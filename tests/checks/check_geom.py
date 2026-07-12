@@ -148,6 +148,10 @@ box = geom.Box_t(corner=src, w=2.5, label="crate")
 check("init derived kwarg", box.w == 2.5 and box.corner.x == 0.0)
 check("init character kwarg", box.label == "crate" + " " * 11)
 
+# --- ctor case: constructor specific returning the type by value ---
+circle = geom.Circle_t(r=2.5)
+check("value ctor", circle.r == 2.5)
+
 # --- delete guard ---
 try:
     del s2.a

@@ -2,6 +2,8 @@ module geom_mod
     implicit none
     private
     public :: point_t, segment_t, box_t, box_t_init, midpoint_x
+    public :: circle_t
+    public :: operator(==)
 
     ! default-new case: no ctor / init
     type :: point_t
@@ -27,6 +29,20 @@ module geom_mod
         module procedure make_segment
     end interface
 
+    ! defined-operator generic: has no Python-callable name, must be skipped
+    interface operator(==)
+        module procedure points_equal
+    end interface
+
+    ! ctor case: constructor specific returns the type by value
+    type :: circle_t
+        real(8) :: r = 1d0
+    end type
+
+    interface circle_t
+        module procedure make_circle
+    end interface
+
     ! init case: <type>_init subroutine with derived-type dummy
     type :: box_t
         type(point_t) :: corner
@@ -35,6 +51,12 @@ module geom_mod
     end type
 
 contains
+
+    function points_equal(a, b) result(eq)
+        type(point_t), intent(in) :: a, b
+        logical :: eq
+        eq = a%x == b%x .and. a%y == b%y
+    end function
 
     function midpoint_x(a, b) result(x)
         type(point_t), intent(in) :: a, b
@@ -57,6 +79,12 @@ contains
         p%id = id
         p%a = a
         p%b = b
+    end function
+
+    function make_circle(r) result(c)
+        real(8), intent(in) :: r
+        type(circle_t) :: c
+        c%r = r
     end function
 
     subroutine box_t_init(box, corner, w, label)

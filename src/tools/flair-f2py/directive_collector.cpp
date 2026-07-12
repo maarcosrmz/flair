@@ -41,6 +41,25 @@ bool directive_collector::Pre(const parse::Name &name) {
 
   // Once we reach the actual node annotated with the
   // compiler directive, save it in the according data structure
+  attach(name);
+  return false;
+}
+
+void directive_collector::Post(const parse::Name &) { first = false; }
+
+bool directive_collector::Pre(const parse::FunctionStmt &stmt) {
+  if (!inside_directive)
+    attach(std::get<parse::Name>(stmt.t));
+  return true;
+}
+
+bool directive_collector::Pre(const parse::DerivedTypeStmt &stmt) {
+  if (!inside_directive)
+    attach(std::get<parse::Name>(stmt.t));
+  return true;
+}
+
+void directive_collector::attach(const parse::Name &name) {
   switch (kind) {
   case FlairDirective::IGNORE:
     ignore.insert(name.ToString());
@@ -59,10 +78,7 @@ bool directive_collector::Pre(const parse::Name &name) {
 
   // reset
   kind = FlairDirective::NONE;
-  return false;
 }
-
-void directive_collector::Post(const parse::Name &) { first = false; }
 
 std::string
 directive_collector::directive_sentinel(const parse::CharBlock &body) {
