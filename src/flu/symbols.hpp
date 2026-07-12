@@ -18,6 +18,9 @@ namespace flu {
 // not a binding.
 sema::Symbol const *binding_actual(sema::Symbol const &binding);
 
+// True if derived type `derived` is `base` or extends it (transitively).
+bool extends_or_is(sema::Symbol const &derived, sema::Symbol const &base);
+
 // Rank of an object entity (0 = scalar / non-object).
 int rank_of(sema::Symbol const &sym);
 

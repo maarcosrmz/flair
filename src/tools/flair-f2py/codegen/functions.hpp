@@ -37,6 +37,10 @@ struct dtype_class_t {
 dtype_class_t classify_dtype(Fortran::semantics::DeclTypeSpec const &t,
                              module_info_t const &m);
 
+// Concrete wrapped types substituted for polymorphic (class) dummies of an
+// '!flair$ instantiate'd procedure: positional dummy index -> type symbol.
+using poly_overrides_t = std::map<size_t, Fortran::semantics::Symbol const *>;
+
 // Record a Foreign type for import/interface emission. False (with a real
 // diagnostic) when the folded name collides with a different type already
 // recorded (the name-keyed FLAIR_* linker symbols would collide) or the
@@ -66,11 +70,17 @@ bool note_ext_type(ext_types_t &ext_types,
 //
 // `owner_name` is the wrappable enclosing procedure (module function or method
 // binding); it is named in the "add '!flair$ ignore ...'" hint of any error.
+//
+// A dummy listed in `overrides` is unwrapped as the given concrete wrapped
+// type instead of its declared one, skipping classification entirely: this is
+// how a class(base_t)/class(*) dummy of an instantiated procedure receives a
+// `type(t), pointer` actual (and thereby its dynamic type).
 bool parse_args(std::vector<Fortran::semantics::Symbol *> const &dummies,
                 module_info_t const &m, str_t const &owner_name,
                 str_t const &fail_return, str_t &decls, str_t &fetch,
                 str_t &call_args, string_pool_t &strings,
-                str_t *cleanup = nullptr, ext_types_t *ext_types = nullptr);
+                str_t *cleanup = nullptr, ext_types_t *ext_types = nullptr,
+                poly_overrides_t const *overrides = nullptr);
 
 // Set `r` from a Fortran call: function result (rt != null) -> to_py;
 // subroutine -> None.
@@ -82,14 +92,18 @@ std::vector<Fortran::semantics::Symbol *>
 drop_self(std::vector<Fortran::semantics::Symbol *> const &dummies);
 
 // One free module function. Appends its module-table row to `fills` (bumps
-// `n`). "" if skipped. `call_name`, if non-empty, overrides the Fortran
-// procedure invoked in the body (the wrapper symbol is still named after `fn`):
-// used for interface specifics, which call the public generic name so that
-// resolution picks the specific from the typed actuals even when the specific
-// itself is private.
+// `n`); a null `fills` generates the wrapper without exposing it. "" if
+// skipped. `call_name`, if non-empty, overrides the Fortran procedure invoked
+// in the body (the wrapper symbol is still named after `fn`): used for
+// interface specifics, which call the public generic name so that resolution
+// picks the specific from the typed actuals even when the specific itself is
+// private. `wrapper_name`, if non-empty, overrides the wrapper symbol itself
+// (per-type instantiate specifics); `overrides` is forwarded to parse_args.
 str_t gen_module_function(Fortran::semantics::Symbol const &fn,
                           module_info_t const &m, string_pool_t &strings,
                           str_t *fills, int &n, ext_types_t &ext_types,
-                          str_t const &call_name = {});
+                          str_t const &call_name = {},
+                          str_t const &wrapper_name = {},
+                          poly_overrides_t const *overrides = nullptr);
 
 } // namespace codegen

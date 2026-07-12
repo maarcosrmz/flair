@@ -85,7 +85,7 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
                 module_info_t const &m, str_t const &owner_name,
                 str_t const &fail_return, str_t &decls, str_t &fetch,
                 str_t &call_args, string_pool_t &strings, str_t *cleanup,
-                ext_types_t *ext_types) {
+                ext_types_t *ext_types, poly_overrides_t const *overrides) {
   str_t const ignore_hint = "; annotate '" + owner_name +
                             "' with a '!flair$ ignore' directive to skip it";
   auto add_actual = [&](str_t const &actual) {
@@ -110,7 +110,17 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
                          " {}\n            return\n        end if\n",
                          obj, fail_return);
 
-    if (auto const c = classify_dtype(*t, m);
+    // An instantiate override replaces the declared (polymorphic) type with a
+    // concrete wrapped one, bypassing classification (which would either pick
+    // the declared base of class(t) or reject class(*) outright).
+    semantics::Symbol const *ov = nullptr;
+    if (overrides != nullptr)
+      if (auto const it = overrides->find(size_t(i)); it != overrides->end())
+        ov = it->second;
+
+    if (auto const c = ov != nullptr
+                           ? dtype_class_t{dtype_class::Local, ov, m.name}
+                           : classify_dtype(*t, m);
         c.cls != dtype_class::NotDerived) {
       str_t const val = fmt::format("v{}", i);
       if (c.cls == dtype_class::Local) {
@@ -201,8 +211,7 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
       } else {
         add_actual(narrow(*t, val));
       }
-    } else if (int const rr = flu::rank_of(*d);
-               rr > 0 && array_supported(*t)) {
+    } else if (int const rr = flu::rank_of(*d); rr > 0 && array_supported(*t)) {
       // Intrinsic array: coerce to an F-contiguous numpy array of the exact
       // dtype and point a Fortran array at its data. For intent(out)/inout the
       // WRITEBACKIFCOPY flag arranges any coercion copy to be flushed back into
@@ -285,18 +294,21 @@ drop_self(std::vector<semantics::Symbol *> const &dummies) {
 
 str_t gen_module_function(semantics::Symbol const &fn, module_info_t const &m,
                           string_pool_t &strings, str_t *fills, int &n,
-                          ext_types_t &ext_types, str_t const &call_name) {
+                          ext_types_t &ext_types, str_t const &call_name,
+                          str_t const &wrapper_name,
+                          poly_overrides_t const *overrides) {
   if (!fn.has<semantics::SubprogramDetails>())
     return "";
   auto const &sub = fn.get<semantics::SubprogramDetails>();
 
   str_t const pyname = fn.name().ToString();
-  str_t const wrapper = fmt::format("py_mod_{}", pyname);
+  str_t const wrapper =
+      wrapper_name.empty() ? fmt::format("py_mod_{}", pyname) : wrapper_name;
   str_t const callee = call_name.empty() ? pyname : call_name;
 
   str_t decls, fetch, call_args, cleanup;
   if (!parse_args(sub.dummyArgs(), m, pyname, "r = c_null_ptr", decls, fetch,
-                  call_args, strings, &cleanup, &ext_types))
+                  call_args, strings, &cleanup, &ext_types, overrides))
     return "";
 
   semantics::DeclTypeSpec const *rt =

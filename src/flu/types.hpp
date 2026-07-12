@@ -8,7 +8,8 @@
 
 namespace Fortran::semantics {
 class DeclTypeSpec;
-}
+class Symbol;
+} // namespace Fortran::semantics
 
 // ---------------------------------------------------------------------------
 // flu -- flang utilities. Generic queries over flang semantic entities,
@@ -31,5 +32,16 @@ std::optional<std::int64_t> char_len(Fortran::semantics::DeclTypeSpec const &t);
 
 // Folded name of a derived type, or "" if `t` is not a derived type.
 std::string derived_name(Fortran::semantics::DeclTypeSpec const &t);
+
+// class(t) or class(*) declaration.
+bool is_polymorphic(Fortran::semantics::DeclTypeSpec const &t);
+
+// class(*) / type(*) (unlimited polymorphic / assumed type).
+bool is_unlimited_polymorphic(Fortran::semantics::DeclTypeSpec const &t);
+
+// Declared base type symbol of a class(base_t) declaration; nullptr for
+// class(*) and non-polymorphic types.
+Fortran::semantics::Symbol const *
+poly_base(Fortran::semantics::DeclTypeSpec const &t);
 
 } // namespace flu

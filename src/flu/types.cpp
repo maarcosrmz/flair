@@ -40,4 +40,18 @@ std::string derived_name(semantics::DeclTypeSpec const &t) {
   return "";
 }
 
+bool is_polymorphic(semantics::DeclTypeSpec const &t) {
+  return t.IsPolymorphic();
+}
+
+bool is_unlimited_polymorphic(semantics::DeclTypeSpec const &t) {
+  return t.IsUnlimitedPolymorphic();
+}
+
+semantics::Symbol const *poly_base(semantics::DeclTypeSpec const &t) {
+  if (t.category() != semantics::DeclTypeSpec::ClassDerived)
+    return nullptr;
+  return &t.derivedTypeSpec().typeSymbol();
+}
+
 } // namespace flu

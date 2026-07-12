@@ -11,9 +11,11 @@ namespace sema = Fortran::semantics;
 struct state {
   module_info_t &mi;
   const std::unordered_set<std::string> &ignored;
+  const std::map<std::string, std::unordered_set<std::string>> &instantiate;
   bool default_private = false;
 
   bool ignore(sema::Symbol const &sym);
+  std::vector<str_t> instantiate_types(sema::Symbol const &sym) const;
 };
 
 void traverse_global_scope(sema::Scope const &global_scope,

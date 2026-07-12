@@ -11,6 +11,7 @@
 #include "flu/diagnostics.hpp"
 #include "flu/symbols.hpp"
 #include "functions.hpp"
+#include "instantiate.hpp"
 #include "interfaces.hpp"
 #include "utils.hpp"
 
@@ -81,40 +82,63 @@ str_t codegen_module(module_info_t const &m_in) {
       pyinit_creates;
 
   // ---- derived types -------------------------------------------------------
+  // Two passes over the types: the first generates the procedures and
+  // accumulates each type's method/getset rows, the second emits the (now
+  // fully sized) tables and PyInit fills. The rows of one type cannot be
+  // finalized inside its own iteration because an '!flair$ instantiate'd
+  // type-bound procedure registers its dispatcher in every listed type's
+  // method table.
+  std::map<str_t, type_tables_t> tables;
   for (auto const &[name, dt] : m.derived_types) {
     if (dt.ptr == nullptr)
       continue;
-    semantics::Symbol const &tsym = *dt.ptr;
-    str_t const tn = tname(tsym), cls = clsname(tsym);
+    str_t const tn = tname(*dt.ptr);
 
     structs += gen_object_struct(dt);
 
     sema::SymbolVector fields = public_fields(dt, m);
     procedures += gen_lifecycle(dt, m, strings, ext_types) + "\n";
 
-    str_t method_fills;
-    int nm = 0;
     for (fnt_info_t const &mth : dt.methods) {
       if (mth.ptr == nullptr)
         continue;
       if (auto const *act = flu::binding_actual(*mth.ptr))
         bound.insert(act);
-      procedures +=
-          gen_method(dt, *mth.ptr, m, strings, method_fills, nm, ext_types);
+      if (!mth.instantiate.empty())
+        procedures +=
+            gen_instantiated_method(dt, mth, m, strings, tables, ext_types);
+      else
+        procedures +=
+            gen_method(dt, *mth.ptr, m, strings, &tables[tn].method_fills,
+                       tables[tn].nm, ext_types);
     }
-    method_fills += method_sentinel(tn + "_methods", nm + 1);
 
-    str_t getset_fills;
-    int ng = 0;
     for (const sema::Symbol &f : fields)
-      procedures += gen_getset(dt, f, m, strings, getset_fills, ng, ext_types);
-    getset_fills += getset_sentinel(tn + "_getset", ng + 1);
+      procedures += gen_getset(dt, f, m, strings, tables[tn].getset_fills,
+                               tables[tn].ng, ext_types);
+
+    tables[tn].spec = spec_fills(tn, clsname(*dt.ptr), modpy, strings);
+    tables[tn].create = create_fills(tn, clsname(*dt.ptr), strings);
+  }
+
+  for (auto const &[name, dt] : m.derived_types) {
+    if (dt.ptr == nullptr)
+      continue;
+    semantics::Symbol const &tsym = *dt.ptr;
+    str_t const tn = tname(tsym);
+    type_tables_t const &tt = tables[tn];
+
+    str_t const method_fills =
+        tt.method_fills + method_sentinel(tn + "_methods", tt.nm + 1);
+    str_t const getset_fills =
+        tt.getset_fills + getset_sentinel(tn + "_getset", tt.ng + 1);
 
     table_decls +=
         fmt::format("    type(PyMethodDef_t), target, save :: {}_methods({})\n",
-                    tn, nm + 1);
-    table_decls += fmt::format(
-        "    type(PyGetSetDef_t), target, save :: {}_getset({})\n", tn, ng + 1);
+                    tn, tt.nm + 1);
+    table_decls +=
+        fmt::format("    type(PyGetSetDef_t), target, save :: {}_getset({})\n",
+                    tn, tt.ng + 1);
     table_decls += fmt::format(
         "    type(PyType_Slot_t), target, save :: {}_slots(6)\n", tn);
     table_decls +=
@@ -129,8 +153,8 @@ str_t codegen_module(module_info_t const &m_in) {
     pyinit_fills +=
         fmt::format("        ! --- {} getset table ---\n", tn) + getset_fills;
     pyinit_fills += slot_fills(tn);
-    pyinit_fills += spec_fills(tn, cls, modpy, strings);
-    pyinit_creates += create_fills(tn, cls, strings);
+    pyinit_fills += tt.spec;
+    pyinit_creates += tt.create;
   }
 
   // Interface specifics are exposed only through their generic's dispatcher, so
@@ -149,8 +173,12 @@ str_t codegen_module(module_info_t const &m_in) {
   for (auto const &fn : m.functions) {
     if (fn.ptr == nullptr || bound.count(fn.ptr))
       continue;
-    procedures +=
-        gen_module_function(*fn.ptr, m, strings, &modfn_fills, nmod, ext_types);
+    if (!fn.instantiate.empty())
+      procedures += gen_instantiated_function(fn, m, strings, modfn_fills, nmod,
+                                              ext_types);
+    else
+      procedures += gen_module_function(*fn.ptr, m, strings, &modfn_fills, nmod,
+                                        ext_types);
   }
   for (auto const &iface : m.interfaces) {
     if (iface.ptr == nullptr /* TODO: or bound to dtype (?) */)

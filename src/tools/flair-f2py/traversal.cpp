@@ -3,12 +3,24 @@
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/Support/CommandLine.h>
 
+#include <algorithm>
+
+#include "flu/symbols.hpp"
 #include "traversal.hpp"
 
 // --- state ---
 bool state::ignore(sema::Symbol const &sym) {
   return ignored.find(sym.name().ToString()) != ignored.end() or
          (default_private and not sym.attrs().test(sema::Attr::PUBLIC));
+}
+
+std::vector<str_t> state::instantiate_types(sema::Symbol const &sym) const {
+  auto const it = instantiate.find(sym.name().ToString());
+  if (it == instantiate.end())
+    return {};
+  std::vector<str_t> types(it->second.begin(), it->second.end());
+  std::sort(types.begin(), types.end());
+  return types;
 }
 // -------------
 
@@ -20,7 +32,11 @@ void traverse_module(sema::Symbol const &mod_sym, state &s);
 
 void traverse_global_scope(const sema::Scope &root,
                            std::shared_ptr<wdata_t> wdata) {
-  const std::unordered_set<std::string> &ignore = wdata->collector->ignore;
+  std::unordered_set<std::string> ignore = wdata->collector->ignore;
+  // NOTE: ignore `!flair$ callback` annotated symbols for now
+  ignore.insert(wdata->collector->callbacks.begin(),
+                wdata->collector->callbacks.end());
+
   for (auto const &[name, sym_ref] : root) {
     sema::Symbol const &sym = sym_ref.get();
     if (not sym.has<sema::ModuleDetails>() or
@@ -32,7 +48,7 @@ void traverse_global_scope(const sema::Scope &root,
       continue;
 
     module_info_t mi(name.ToString());
-    state s{mi, ignore};
+    state s{mi, ignore, wdata->collector->instantiate};
     traverse_module(sym, s);
     wdata->modules.push_back(std::move(mi));
   }
@@ -50,7 +66,7 @@ void traverse_module(sema::Symbol const &mod_sym, state &s) {
     if (not sym.has<sema::SubprogramDetails>())
       return;
 
-    fnt_info_t fi{&sym, false, nullptr};
+    fnt_info_t fi{&sym, false, nullptr, s.instantiate_types(sym)};
     if (auto dt = get_dtype_of_initializer(sym, s.mi))
       dt->init = std::move(fi); // We have found the subroutine in charge of
                                 // initializing a derived_type
@@ -102,14 +118,19 @@ void traverse_module(sema::Symbol const &mod_sym, state &s) {
     if (dtype_scope == nullptr)
       return;
 
-    auto const match_proc_binding = [&dt](sema::Symbol const &sym) {
+    auto const match_proc_binding = [&s, &dt](sema::Symbol const &sym) {
       if (not sym.has<sema::ProcBindingDetails>())
         return;
       // Type-bound procedure accesibility is public by default
       if (sym.attrs().test(sema::Attr::PRIVATE))
         return;
 
-      dt.methods.emplace_back(fnt_info_t{&sym, false, dt.ptr});
+      // The instantiate directive sits on the actual subprogram in the
+      // module's contains section, so look it up by the actual's name.
+      std::vector<str_t> inst;
+      if (auto const *act = flu::binding_actual(sym))
+        inst = s.instantiate_types(*act);
+      dt.methods.emplace_back(fnt_info_t{&sym, false, dt.ptr, std::move(inst)});
     };
 
     llvm::for_each(dtype_scope->GetSymbols(), match_proc_binding);

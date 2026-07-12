@@ -153,8 +153,7 @@ static str_t ctor_new_body(str_t const &pf) {
 static str_t arg_check_decls(std::vector<sema::Symbol const *> const &accepted,
                              module_info_t const &m) {
   str_t d;
-  bool any_real = false, any_int = false, any_logical = false,
-       any_char = false;
+  bool any_real = false, any_int = false, any_logical = false, any_char = false;
   d += "        type(c_ptr) :: arg\n";
   for (sema::Symbol const *s : accepted) {
     str_t const nm = s->name().ToString();
@@ -326,9 +325,8 @@ static str_t arg_check_stmts(std::vector<sema::Symbol const *> const &accepted,
       if (auto const cl = flu::char_len(*t)) {
         // kw_<nm> is character(N): reject longer strings instead of letting
         // the assignment truncate; shorter ones blank-pad.
-        str_t const s_len = strings.intern(
-            fmt::format("{}() argument '{}' exceeds character length {}",
-                        pyname, nm, *cl));
+        str_t const s_len = strings.intern(fmt::format(
+            "{}() argument '{}' exceeds character length {}", pyname, nm, *cl));
         b += fmt::format("                if (len(kw_vc) > {}) then\n", *cl);
         b += fmt::format("                    call PyErr_SetString(PyExc_"
                          "ValueError, c_loc({}))\n",
@@ -529,9 +527,10 @@ str_t gen_lifecycle(dtype_info_t const &dt, module_info_t const &m,
 }
 
 str_t gen_method(dtype_info_t const &dt, sema::Symbol const &binding,
-                 module_info_t const &m, string_pool_t &strings, str_t &fills,
-                 int &n, ext_types_t &ext_types) {
-  sema::Symbol const &tsym = *dt.ptr;
+                 module_info_t const &m, string_pool_t &strings, str_t *fills,
+                 int &n, ext_types_t &ext_types, sema::Symbol const *self_type,
+                 poly_overrides_t const *overrides, str_t const &wrapper_name) {
+  sema::Symbol const &tsym = self_type != nullptr ? *self_type : *dt.ptr;
   sema::Symbol const *actual = flu::binding_actual(binding);
   if (actual == nullptr || !actual->has<sema::SubprogramDetails>())
     return "";
@@ -539,14 +538,17 @@ str_t gen_method(dtype_info_t const &dt, sema::Symbol const &binding,
 
   str_t const tn = tname(tsym);
   str_t const pyname = binding.name().ToString();
-  str_t const wrapper = fmt::format("py_{}_{}", tn, pyname);
+  str_t const wrapper =
+      wrapper_name.empty() ? fmt::format("py_{}_{}", tn, pyname) : wrapper_name;
 
   std::vector<sema::Symbol *> args = drop_self(sub.dummyArgs());
   str_t decls, fetch, call_args, cleanup;
   if (!parse_args(args, m, tn, "r = c_null_ptr", decls, fetch, call_args,
-                  strings, &cleanup, &ext_types))
-    return fmt::format("    ! TODO: unsupported argument(s): {}%{}\n\n", tn,
-                       pyname);
+                  strings, &cleanup, &ext_types, overrides))
+    return fills == nullptr
+               ? str_t{}
+               : fmt::format("    ! TODO: unsupported argument(s): {}%{}\n\n",
+                             tn, pyname);
 
   sema::DeclTypeSpec const *rt =
       sub.isFunction() ? sub.result().GetType() : nullptr;
@@ -556,13 +558,17 @@ str_t gen_method(dtype_info_t const &dt, sema::Symbol const &binding,
                         "': unsupported result type; annotate the type '" + tn +
                         "' with a '!flair$ ignore' directive to skip "
                         "it");
-    return fmt::format("    ! TODO: unsupported result type: {}%{}\n\n", tn,
-                       pyname);
+    return fills == nullptr
+               ? str_t{}
+               : fmt::format("    ! TODO: unsupported result type: {}%{}\n\n",
+                             tn, pyname);
   }
 
-  ++n;
-  fills += method_row(tn + "_methods", n, strings.intern(pyname), wrapper,
-                      args.empty() ? "METH_NOARGS" : "METH_VARARGS");
+  if (fills != nullptr) {
+    ++n;
+    *fills += method_row(tn + "_methods", n, strings.intern(pyname), wrapper,
+                         args.empty() ? "METH_NOARGS" : "METH_VARARGS");
+  }
 
   str_t body = decls;
   body += "        call c_f_pointer(self, pt)\n";

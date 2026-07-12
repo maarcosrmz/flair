@@ -78,7 +78,7 @@ location) to `flair-f2py`, since the tool does not locate flang's intrinsic
 | `test_arrays` | NumPy array args: intent in/inout/out, rank 1/2, dtype mapping, writeback-if-copy |
 | `test_scalars` | numeric kinds, None returns, `METH_NOARGS` |
 | `test_visibility` | only public symbols are wrapped |
-| `test_directives` | `!flair$ ignore`, abort on unwrappable procedure with actionable hint |
+| `test_directives` | `!flair$ ignore`, abort on unwrappable procedure with actionable hint; `!flair$ instantiate`: per-type wrappers + tp_name dispatch for `class(t)`/`class(*)` args of free functions and type-bound procedures (incl. inherited-binding registration on derived types), directive diagnostics |
 | `test_field_warn` | unwrappable component warns + is skipped, type still wrapped |
 | `test_negative` | skipped-field warnings, unwrappable ctors, intrinsic-module args, character args all abort/warn as specified |
 

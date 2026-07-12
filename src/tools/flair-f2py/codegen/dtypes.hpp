@@ -31,10 +31,17 @@ str_t gen_lifecycle(dtype_info_t const &dt, module_info_t const &m,
                     string_pool_t &strings, ext_types_t &ext_types);
 
 // One type-bound method. Appends its PyInit method-table row to `fills` (bumps
-// `n`).
+// `n`); a null `fills` generates the wrapper without exposing it ("" instead
+// of a placeholder comment if skipped). `self_type`, if non-null, replaces the
+// home type for the self unwrap (a `type(self_type), pointer` receiver): used
+// by instantiate specifics, together with `overrides` (post-drop_self indices,
+// forwarded to parse_args) and `wrapper_name` (overrides "py_<t>_<binding>").
 str_t gen_method(dtype_info_t const &dt, sema::Symbol const &binding,
-                 module_info_t const &m, string_pool_t &strings, str_t &fills,
-                 int &n, ext_types_t &ext_types);
+                 module_info_t const &m, string_pool_t &strings, str_t *fills,
+                 int &n, ext_types_t &ext_types,
+                 sema::Symbol const *self_type = nullptr,
+                 poly_overrides_t const *overrides = nullptr,
+                 str_t const &wrapper_name = {});
 
 // One getset property (scalar, rank-1 numpy array, or derived-type view).
 // Appends its getset-table row.

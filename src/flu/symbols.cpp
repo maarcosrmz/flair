@@ -15,6 +15,16 @@ semantics::Symbol const *binding_actual(semantics::Symbol const &binding) {
   return nullptr;
 }
 
+bool extends_or_is(sema::Symbol const &derived, sema::Symbol const &base) {
+  for (sema::Symbol const *t = &derived; t != nullptr;) {
+    if (&t->GetUltimate() == &base.GetUltimate())
+      return true;
+    auto const *parent = t->GetParentTypeSpec();
+    t = parent ? &parent->typeSymbol() : nullptr;
+  }
+  return false;
+}
+
 int rank_of(semantics::Symbol const &sym) {
   if (auto const *obj = sym.detailsIf<semantics::ObjectEntityDetails>())
     return obj->IsArray() ? obj->shape().Rank() : 0;
