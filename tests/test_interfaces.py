@@ -11,7 +11,7 @@ def test_generic_interfaces(builder):
     src = b.generated("generic")
 
     # one dispatcher exposed under the generic name
-    assert "function py_mod_describe(self, args)" in src
+    assert "function py_mod_describe(self, args, kwds)" in src
 
     # derived-type discrimination compares the runtime tp_name
     assert 'c_string_eq(pytype%tp_name, "generic.Thing_t")' in src
@@ -31,10 +31,10 @@ def test_generic_interfaces(builder):
     assert "unexpected argument type for describe" in src
 
     # kind-only overloads collapse: total dispatches to the widest specific
-    assert re.search(r"r = py_mod_total_i8\(self, args\)", src)
-    assert not re.search(r"r = py_mod_total_i4\(self, args\)", src)
+    assert re.search(r"r = py_mod_total_i8\(self, args, kwds\)", src)
+    assert not re.search(r"r = py_mod_total_i4\(self, args, kwds\)", src)
 
     # single specific: unconditional forward without probing
-    assert re.search(r"r = py_mod_area_circle\(self, args\)", src)
+    assert re.search(r"r = py_mod_area_circle\(self, args, kwds\)", src)
 
     b.run_check("check_generic.py")

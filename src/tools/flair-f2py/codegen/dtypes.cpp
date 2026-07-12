@@ -45,6 +45,17 @@ static constexpr char tpl_method[] = {
     , '\0'};
 #pragma clang diagnostic pop
 
+// METH_NOARGS calling convention passes (self, NULL) only, so those wrappers
+// keep the two-parameter signature.
+static constexpr char tpl_noargs_method[] =
+    "    function {fn}(self, args) bind(C) result(r)\n"
+    "        type(c_ptr), value :: self, args\n"
+    "        type(c_ptr) :: r\n"
+    "        type({struct}), pointer :: pt\n"
+    "        type({tname}), pointer :: p\n"
+    "{body}\n"
+    "    end function\n";
+
 sema::SymbolVector public_fields(dtype_info_t const &dt,
                                  module_info_t const &m) {
   sema::SymbolVector out;
@@ -593,7 +604,8 @@ str_t gen_method(dtype_info_t const &dt, sema::Symbol const &binding,
   if (fills != nullptr) {
     ++n;
     *fills += method_row(tn + "_methods", n, strings.intern(pyname), wrapper,
-                         args.empty() ? "METH_NOARGS" : "METH_VARARGS");
+                         args.empty() ? "METH_NOARGS"
+                                      : "METH_VARARGS + METH_KEYWORDS");
   }
 
   str_t body = decls;
@@ -602,10 +614,11 @@ str_t gen_method(dtype_info_t const &dt, sema::Symbol const &binding,
   body += fetch;
   body += build_result(rt, fmt::format("p%{}({})", pyname, call_args));
   body += cleanup;
-  return render(tpl_method, {{"fn", wrapper},
-                             {"struct", struct_name(tsym)},
-                             {"tname", tn},
-                             {"body", body}}) +
+  return render(args.empty() ? tpl_noargs_method : tpl_method,
+                {{"fn", wrapper},
+                 {"struct", struct_name(tsym)},
+                 {"tname", tn},
+                 {"body", body}}) +
          "\n";
 }
 

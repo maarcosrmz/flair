@@ -1,5 +1,7 @@
 #include "functions.hpp"
 
+#include <algorithm>
+
 #include <fmt/core.h>
 #include <fmt/format.h>
 
@@ -25,6 +27,15 @@ static constexpr char tpl_module_function[] = {
 #embed "templates/module_function.txt"
     , '\0'};
 #pragma clang diagnostic pop
+
+// METH_NOARGS calling convention passes (self, NULL) only, so those wrappers
+// keep the two-parameter signature.
+static constexpr char tpl_noargs_function[] =
+    "    function {fn}(self, args) bind(C) result(r)\n"
+    "        type(c_ptr), value :: self, args\n"
+    "        type(c_ptr) :: r\n"
+    "{body}\n"
+    "    end function\n";
 
 dtype_class_t classify_dtype(semantics::DeclTypeSpec const &t,
                              module_info_t const &m) {
@@ -124,6 +135,22 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
     call_args += actual;
   };
 
+  bool const any_opt =
+      std::any_of(dummies.begin(), dummies.end(), [](semantics::Symbol *d) {
+        return d != nullptr && d->attrs().test(semantics::Attr::OPTIONAL);
+      });
+  if (!dummies.empty()) {
+    decls += "        integer(c_ptrdiff_t) :: nargs\n";
+    decls += "        integer :: nkw\n";
+    decls += "        type(c_ptr) :: kwv\n";
+    if (any_opt)
+      decls += "        type(c_ptr) :: nonep\n";
+    fetch += "        nargs = PyTuple_Size(args)\n";
+    fetch += "        nkw = 0\n";
+    if (any_opt)
+      fetch += "        nonep = Py_GetConstant(Py_CONSTANT_NONE)\n";
+  }
+
   int i = 0; // unique local suffix == positional index
   for (semantics::Symbol *d : dummies) {
     if (d == nullptr)
@@ -139,14 +166,53 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
                               ignore_hint);
       return false;
     }
+    bool const opt = d->attrs().test(semantics::Attr::OPTIONAL);
+    str_t const nm = d->name().ToString();
     str_t const obj = fmt::format("a{}", i);
+    str_t const pres = fmt::format("pr{}", i);
 
+    // The argument may arrive positionally or by keyword (the dummy's name);
+    // an absent or None-valued optional counts as not present.
     decls += fmt::format("        type(c_ptr) :: {}\n", obj);
-    fetch += fmt::format("        {} = PyTuple_GetItem(args, {}_c_ptrdiff_t)\n",
-                         obj, i);
-    fetch += fmt::format("        if (.not. c_associated({})) then\n           "
-                         " {}\n            return\n        end if\n",
-                         obj, fail_return);
+    if (opt)
+      decls += fmt::format("        logical :: {}\n", pres);
+    fetch += fmt::format("        {} = c_null_ptr\n", obj);
+    fetch += fmt::format(
+        "        if (nargs > {0}) {1} = PyTuple_GetItem(args, "
+        "{0}_c_ptrdiff_t)\n",
+        i, obj);
+    fetch += "        if (c_associated(kwds)) then\n";
+    fetch += fmt::format(
+        "            kwv = PyDict_GetItemString(kwds, c_loc({}))\n",
+        strings.intern(nm));
+    fetch += "            if (c_associated(kwv)) then\n";
+    fetch += fmt::format("                if (c_associated({})) then\n", obj);
+    fetch += fmt::format(
+        "                    call PyErr_SetString(PyExc_TypeError, "
+        "c_loc({}))\n",
+        strings.intern("argument '" + nm + "' given by name and position"));
+    fetch += fmt::format(
+        "                    {}\n                    return\n"
+        "                end if\n",
+        fail_return);
+    fetch += fmt::format("                {} = kwv\n", obj);
+    fetch += "                nkw = nkw + 1\n";
+    fetch += "            end if\n";
+    fetch += "        end if\n";
+    if (opt) {
+      fetch += fmt::format("        {} = c_associated({})\n", pres, obj);
+      fetch += fmt::format("        if ({0}) {0} = .not. c_ptr_eq({1}, "
+                           "nonep)\n",
+                           pres, obj);
+    } else {
+      fetch += fmt::format("        if (.not. c_associated({})) then\n", obj);
+      fetch += fmt::format(
+          "            call PyErr_SetString(PyExc_TypeError, c_loc({}))\n",
+          strings.intern("missing required argument '" + nm + "'"));
+      fetch += fmt::format("            {}\n            return\n        end "
+                           "if\n",
+                           fail_return);
+    }
 
     // An instantiate override replaces the declared (polymorphic) type with a
     // concrete wrapped one, bypassing classification (which would either pick
@@ -161,6 +227,7 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
                            : classify_dtype(*t, m);
         c.cls != dtype_class::NotDerived) {
       str_t const val = fmt::format("v{}", i);
+      str_t bfetch; // wrapped in `if (present)` for an optional dummy
       if (c.cls == dtype_class::Local) {
         str_t const s_argtype =
             strings.intern("argument '" + d->name().ToString() +
@@ -169,22 +236,23 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
                              struct_name(*c.sym), i);
         decls += fmt::format("        type({}), pointer :: {}\n", tname(*c.sym),
                              val);
-        fetch += fmt::format("        if (PyObject_IsInstance({}, "
-                             "py_{}_type_obj) /= 1) then\n",
-                             obj, tname(*c.sym));
+        bfetch += fmt::format("        if (PyObject_IsInstance({}, "
+                              "py_{}_type_obj) /= 1) then\n",
+                              obj, tname(*c.sym));
         // IsInstance may return -1 with its own exception set; don't clobber
         // it.
-        fetch += "            if (.not. c_associated(PyErr_Occurred())) then\n";
-        fetch += fmt::format("                call "
-                             "PyErr_SetString(PyExc_TypeError, c_loc({}))\n",
-                             s_argtype);
-        fetch += "            end if\n";
-        fetch += fmt::format("            {}\n            return\n        end "
-                             "if\n",
-                             fail_return);
-        fetch += fmt::format("        call c_f_pointer({}, pt{})\n", obj, i);
-        fetch += fmt::format("        call c_f_pointer(pt{}%{}, {})\n", i,
-                             ptr_field(*c.sym), val);
+        bfetch +=
+            "            if (.not. c_associated(PyErr_Occurred())) then\n";
+        bfetch += fmt::format("                call "
+                              "PyErr_SetString(PyExc_TypeError, c_loc({}))\n",
+                              s_argtype);
+        bfetch += "            end if\n";
+        bfetch += fmt::format("            {}\n            return\n        end "
+                              "if\n",
+                              fail_return);
+        bfetch += fmt::format("        call c_f_pointer({}, pt{})\n", obj, i);
+        bfetch += fmt::format("        call c_f_pointer(pt{}%{}, {})\n", i,
+                              ptr_field(*c.sym), val);
       } else if (c.cls == dtype_class::Foreign && ext_types != nullptr &&
                  note_ext_type(*ext_types, *c.sym)) {
         // Unwrap via the external converter emitted by the file that wraps the
@@ -194,17 +262,26 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
         // owns, so intent(out)/inout mutations propagate back for free.
         str_t const n = tname(*c.sym);
         decls += fmt::format("        type({}), pointer :: {}\n", n, val);
-        fetch += fmt::format("        {} => {}({})\n", val, from_pyobject_fn(n),
-                             obj);
-        fetch += fmt::format("        if (.not. associated({})) then\n         "
-                             "   {}\n            return\n        end if\n",
-                             val, fail_return);
+        bfetch += fmt::format("        {} => {}({})\n", val,
+                              from_pyobject_fn(n), obj);
+        bfetch += fmt::format("        if (.not. associated({})) then\n        "
+                              "    {}\n            return\n        end if\n",
+                              val, fail_return);
       } else {
         flu::emit_error(*d, "flair-f2py: cannot wrap argument '" +
                                 d->name().ToString() + "': derived type '" +
                                 flu::derived_name(*t) +
                                 "' is not a wrapped type" + ignore_hint);
         return false;
+      }
+      if (opt) {
+        // A disassociated pointer actual makes the optional dummy absent
+        // (F2008 15.5.2.13).
+        fetch += fmt::format("        {} => null()\n", val);
+        fetch += fmt::format("        if ({}) then\n", pres) + bfetch +
+                 "        end if\n";
+      } else {
+        fetch += bfetch;
       }
       add_actual(val);
     } else if (flu::rank_of(*d) == 0 && intrinsic_supported(*t)) {
@@ -223,31 +300,67 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
       str_t const val = fmt::format("x{}", i);
       decls += fmt::format("        {} :: {}\n", py_ctype(*t), val);
       decls += fmt::format("        logical :: ok{}\n", i);
-      fetch += fmt::format("        {} = {}({}, ok{})\n", val, py_helper(*t),
-                           obj, i);
-      fetch += fmt::format("        if (.not. ok{}) then\n            {}\n     "
-                           "       return\n        end if\n",
-                           i, fail_return);
-      if (auto const cl = flu::char_len(*t)) {
+      str_t bfetch; // wrapped in `if (present)` for an optional dummy
+      bfetch += fmt::format("        {} = {}({}, ok{})\n", val, py_helper(*t),
+                            obj, i);
+      bfetch += fmt::format("        if (.not. ok{}) then\n            {}\n    "
+                            "        return\n        end if\n",
+                            i, fail_return);
+      auto const cl = flu::char_len(*t);
+      if (cl) {
         // Explicit-length character dummy: the actual must meet the declared
-        // length, so copy into a fixed local (blank-padding shorter strings)
-        // and reject longer ones instead of truncating silently.
-        str_t const fix = fmt::format("xf{}", i);
+        // length (blank-padding shorter strings on assignment); reject longer
+        // ones instead of truncating silently.
         str_t const s_len = strings.intern(
             fmt::format("argument '{}' exceeds character length {}",
                         d->name().ToString(), *cl));
-        decls += fmt::format("        character({}) :: {}\n", *cl, fix);
-        fetch += fmt::format("        if (len({}) > {}) then\n", val, *cl);
-        fetch += fmt::format("            call PyErr_SetString(PyExc_"
-                             "ValueError, c_loc({}))\n",
-                             s_len);
-        fetch += fmt::format("            {}\n            return\n        end "
-                             "if\n",
-                             fail_return);
-        fetch += fmt::format("        {} = {}\n", fix, val);
-        add_actual(fix);
+        bfetch += fmt::format("        if (len({}) > {}) then\n", val, *cl);
+        bfetch += fmt::format("            call PyErr_SetString(PyExc_"
+                              "ValueError, c_loc({}))\n",
+                              s_len);
+        bfetch += fmt::format("            {}\n            return\n        end "
+                              "if\n",
+                              fail_return);
+      }
+      if (!opt) {
+        fetch += bfetch;
+        if (cl) {
+          str_t const fix = fmt::format("xf{}", i);
+          decls += fmt::format("        character({}) :: {}\n", *cl, fix);
+          fetch += fmt::format("        {} = {}\n", fix, val);
+          add_actual(fix);
+        } else {
+          add_actual(narrow(*t, val));
+        }
       } else {
-        add_actual(narrow(*t, val));
+        // An optional value goes through a pointer of the dummy's exact type:
+        // disassociated means absent (F2008 15.5.2.13), allocated otherwise.
+        str_t const optv = fmt::format("xo{}", i);
+        bool const is_char =
+            flu::category(*t) == Fortran::common::TypeCategory::Character;
+        if (cl) {
+          decls +=
+              fmt::format("        character({}), pointer :: {}\n", *cl, optv);
+          bfetch += fmt::format("        allocate({})\n", optv);
+          bfetch += fmt::format("        {} = {}\n", optv, val);
+        } else if (is_char) {
+          decls += fmt::format("        character(:), pointer :: {}\n", optv);
+          bfetch += fmt::format(
+              "        allocate(character(len=len({})) :: {})\n", val, optv);
+          bfetch += fmt::format("        {} = {}\n", optv, val);
+        } else {
+          decls +=
+              fmt::format("        {}, pointer :: {}\n", ftype(*t), optv);
+          bfetch += fmt::format("        allocate({})\n", optv);
+          bfetch += fmt::format("        {} = {}\n", optv, narrow(*t, val));
+        }
+        fetch += fmt::format("        {} => null()\n", optv);
+        fetch += fmt::format("        if ({}) then\n", pres) + bfetch +
+                 "        end if\n";
+        if (cleanup != nullptr)
+          *cleanup += fmt::format(
+              "        if (associated({0})) deallocate({0})\n", optv);
+        add_actual(optv);
       }
     } else if (int const rr = flu::rank_of(*d); rr > 0 && array_supported(*t)) {
       // Intrinsic array: coerce to an F-contiguous numpy array of the exact
@@ -272,26 +385,43 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
       decls += fmt::format("        integer(c_ptrdiff_t) :: {}({})\n", shp, rr);
       if (writeback)
         decls += fmt::format("        integer(c_int) :: wb{}\n", i);
-      fetch += fmt::format(
+      str_t bfetch; // wrapped in `if (present)` for an optional dummy
+      bfetch += fmt::format(
           "        {} = PyArray_FromAny({}, PyArray_DescrFromType({}), "
           "{}_c_int, {}_c_int, {}, c_null_ptr)\n",
           arr, obj, npy(*t), rr, rr, reqs);
-      fetch += fmt::format("        if (.not. c_associated({})) then\n         "
-                           "   {}\n            return\n        end if\n",
-                           arr, fail_return);
+      bfetch += fmt::format("        if (.not. c_associated({})) then\n        "
+                            "    {}\n            return\n        end if\n",
+                            arr, fail_return);
       for (int k = 0; k < rr; ++k)
-        fetch += fmt::format("        {}({}) = PyArray_DIM({}, {}_c_int)\n",
-                             shp, k + 1, arr, k);
-      fetch +=
+        bfetch += fmt::format("        {}({}) = PyArray_DIM({}, {}_c_int)\n",
+                              shp, k + 1, arr, k);
+      bfetch +=
           fmt::format("        call c_f_pointer(PyArray_DATA({}), {}, {})\n",
                       arr, val, shp);
+      str_t bclean;
       if (cleanup != nullptr) {
         // Resolve before decref: an unresolved writeback array warns and drops
         // the write on decref.
         if (writeback)
-          *cleanup += fmt::format(
+          bclean += fmt::format(
               "        wb{0} = PyArray_ResolveWritebackIfCopy({1})\n", i, arr);
-        *cleanup += fmt::format("        call Py_DecRef({})\n", arr);
+        bclean += fmt::format("        call Py_DecRef({})\n", arr);
+      }
+      if (opt) {
+        // A disassociated pointer actual makes the optional dummy absent
+        // (F2008 15.5.2.13).
+        fetch += fmt::format("        {} = c_null_ptr\n", arr);
+        fetch += fmt::format("        {} => null()\n", val);
+        fetch += fmt::format("        if ({}) then\n", pres) + bfetch +
+                 "        end if\n";
+        if (cleanup != nullptr && !bclean.empty())
+          *cleanup += fmt::format("        if (c_associated({})) then\n", arr) +
+                      bclean + "        end if\n";
+      } else {
+        fetch += bfetch;
+        if (cleanup != nullptr)
+          *cleanup += bclean;
       }
       add_actual(val);
     } else {
@@ -301,6 +431,19 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
       return false;
     }
     ++i;
+  }
+
+  // Every keyword must have been consumed by a dummy above.
+  if (!dummies.empty()) {
+    fetch += "        if (c_associated(kwds)) then\n";
+    fetch += "            if (PyDict_Size(kwds) /= int(nkw, c_ptrdiff_t)) "
+             "then\n";
+    fetch += fmt::format(
+        "                call PyErr_SetString(PyExc_TypeError, c_loc({}))\n",
+        strings.intern("unexpected keyword argument"));
+    fetch += fmt::format("                {}\n                return\n", fail_return);
+    fetch += "            end if\n";
+    fetch += "        end if\n";
   }
   return true;
 }
@@ -362,13 +505,18 @@ str_t gen_module_function(semantics::Symbol const &fn, module_info_t const &m,
   }
 
   if (fills != nullptr)
-    *fills +=
-        method_row("module_methods", ++n, strings.intern(pyname), wrapper,
-                   sub.dummyArgs().empty() ? "METH_NOARGS" : "METH_VARARGS");
+    *fills += method_row("module_methods", ++n, strings.intern(pyname), wrapper,
+                         sub.dummyArgs().empty()
+                             ? "METH_NOARGS"
+                             : "METH_VARARGS + METH_KEYWORDS");
 
   str_t body = decls + fetch;
   body += build_result(rt, fmt::format("{}({})", callee, call_args));
   body += cleanup;
+  // METH_NOARGS wrappers are called with (self, NULL): no kwds parameter.
+  if (sub.dummyArgs().empty())
+    return render(tpl_noargs_function, {{"fn", wrapper}, {"body", body}}) +
+           "\n";
   return render(tpl_module_function, {{"fn", wrapper}, {"body", body}}) + "\n";
 }
 

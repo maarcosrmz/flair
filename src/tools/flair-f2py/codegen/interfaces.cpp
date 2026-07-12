@@ -40,10 +40,11 @@ namespace {
 // numpy dtype + rank, both of which *are* visible at runtime.
 struct arg_tag_t {
   enum kind_t { Int, Real, Cmplx, Bool, Str, Derived, Array } kind;
-  str_t derived; // Derived: tp_name literal "<modpy>.<Class>"
-  str_t npy;     // Array: numpy type code constant
-  int rank = 0;  // Array: rank
-  int skind = 0; // scalar: Fortran kind (for widest-overload selection)
+  str_t derived;         // Derived: tp_name literal "<modpy>.<Class>"
+  str_t npy;             // Array: numpy type code constant
+  int rank = 0;          // Array: rank
+  int skind = 0;         // scalar: Fortran kind (for widest-overload selection)
+  bool optional = false; // absent/None at this position still matches
 };
 
 // Stable per-position key, ignoring scalar kind, used for grouping overloads
@@ -86,6 +87,7 @@ bool build_tags(semantics::Symbol const &spec, std::vector<arg_tag_t> &out) {
     if (t == nullptr)
       return false;
     arg_tag_t tag;
+    tag.optional = d->attrs().test(semantics::Attr::OPTIONAL);
     if (auto const *ds = t->AsDerived()) {
       // The tp_name the object carries at runtime is set by the file that wraps
       // the *defining* module, so key the discriminator on that module's python
@@ -173,12 +175,14 @@ str_t gen_interface_wrapper(
 
   if (fills != nullptr)
     *fills += method_row("module_methods", ++n, strings.intern(pyname), wrapper,
-                         "METH_VARARGS");
+                         "METH_VARARGS + METH_KEYWORDS");
 
   // ---- single candidate: unconditional forward ----------------------------
+  // A specific without dummies has the two-parameter METH_NOARGS signature.
   if (uniq.size() == 1) {
-    str_t body =
-        fmt::format("        r = {}(self, args)\n", fwd(uniq.front().sym));
+    str_t body = fmt::format("        r = {}(self, args{})\n",
+                             fwd(uniq.front().sym),
+                             uniq.front().tags.empty() ? "" : ", kwds");
     return render(tpl_dispatch, {{"fn", wrapper}, {"body", body}}) + "\n";
   }
 
@@ -239,6 +243,7 @@ str_t gen_interface_wrapper(
 
   // ---- declarations -------------------------------------------------------
   str_t decls;
+  decls += "        integer(c_ptrdiff_t) :: nargs\n";
   for (size_t p : disc) {
     decls += fmt::format("        type(c_ptr) :: a{}\n", p);
     decls += fmt::format("        integer :: tag{}\n", p);
@@ -263,6 +268,7 @@ str_t gen_interface_wrapper(
 
   // ---- classify each discriminating position into tag<p> -------------------
   str_t cls;
+  cls += "        nargs = PyTuple_Size(args)\n";
   for (size_t p : disc) {
     // present tags at this position
     bool d = false, a = false, ii = false, rr = false, zz = false, bb = false,
@@ -303,8 +309,11 @@ str_t gen_interface_wrapper(
       }
     }
 
+    cls += fmt::format("        a{} = c_null_ptr\n", p);
     cls += fmt::format(
-        "        a{0} = PyTuple_GetItem(args, {0}_c_ptrdiff_t)\n", p);
+        "        if (nargs > {0}) a{0} = PyTuple_GetItem(args, "
+        "{0}_c_ptrdiff_t)\n",
+        p);
     cls += fmt::format("        tag{} = 0\n", p);
     cls += fmt::format("        if (c_associated(a{})) then\n", p);
     str_t const I = "            ";
@@ -438,14 +447,22 @@ str_t gen_interface_wrapper(
   // ---- forward to the matching specific wrapper ----------------------------
   str_t fwdc;
   for (auto const &c : uniq) {
-    str_t guard;
+    // Too many positional arguments rule the candidate out; an absent (or
+    // None) value at a discriminating position matches when the candidate's
+    // dummy there is optional.
+    str_t guard =
+        fmt::format("nargs <= {}_c_ptrdiff_t", c.tags.size());
     for (size_t p : disc) {
-      if (!guard.empty())
-        guard += " .and. ";
-      guard += fmt::format("tag{} == {}", p, code_of(c.tags[p]));
+      guard += " .and. ";
+      if (c.tags[p].optional)
+        guard += fmt::format("(tag{0} == {1} .or. tag{0} == 0)", p,
+                             code_of(c.tags[p]));
+      else
+        guard += fmt::format("tag{} == {}", p, code_of(c.tags[p]));
     }
     fwdc += fmt::format("        if ({}) then\n", guard);
-    fwdc += fmt::format("            r = {}(self, args)\n", fwd(c.sym));
+    fwdc += fmt::format("            r = {}(self, args{})\n", fwd(c.sym),
+                        c.tags.empty() ? "" : ", kwds");
     fwdc += "            return\n";
     fwdc += "        end if\n";
   }

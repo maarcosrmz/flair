@@ -17,9 +17,10 @@ module python_api_mod
     integer(c_int), parameter :: Py_sq_length     = 45
 
     ! PyMethodDef.ml_flags
-    integer(c_int), parameter :: METH_VARARGS = 1
-    integer(c_int), parameter :: METH_NOARGS  = 4
-    integer(c_int), parameter :: METH_O       = 8
+    integer(c_int), parameter :: METH_VARARGS  = 1
+    integer(c_int), parameter :: METH_KEYWORDS = 2
+    integer(c_int), parameter :: METH_NOARGS   = 4
+    integer(c_int), parameter :: METH_O        = 8
 
     ! PyType_Spec.flags
     integer(c_int), parameter :: Py_TPFLAGS_DEFAULT = 0
@@ -315,6 +316,12 @@ module python_api_mod
             type(c_ptr), value :: dp
             type(c_ptr), value :: key
             type(c_ptr) :: r
+        end function
+
+        function PyDict_Size(dp) bind(C, name="PyDict_Size") result(r)
+            import :: c_ptr, c_ptrdiff_t
+            type(c_ptr), value :: dp
+            integer(c_ptrdiff_t) :: r
         end function
 
         function PyDict_Next(dp, ppos, pkey, pvalue) bind(C, name="PyDict_Next") result(r)

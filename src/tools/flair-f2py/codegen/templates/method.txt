@@ -1,5 +1,5 @@
-    function {fn}(self, args) bind(C) result(r)
-        type(c_ptr), value :: self, args
+    function {fn}(self, args, kwds) bind(C) result(r)
+        type(c_ptr), value :: self, args, kwds
         type(c_ptr) :: r
         type({struct}), pointer :: pt
         type({tname}), pointer :: p

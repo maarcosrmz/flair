@@ -160,7 +160,7 @@ str_t gen_dispatcher(str_t const &wrapper, str_t const &pyname, bool self_poly,
                      std::vector<size_t> const &arg_pos,
                      std::vector<sema::Symbol const *> const &types,
                      std::vector<combo_t> const &combos,
-                     string_pool_t &strings) {
+                     string_pool_t &strings, bool fwd_kwds) {
   str_t decls;
   decls += "        type(PyObject_t), pointer :: pyobj\n";
   decls += "        type(PyTypeObject_t), pointer :: pytype\n";
@@ -211,7 +211,8 @@ str_t gen_dispatcher(str_t const &wrapper, str_t const &pyname, bool self_poly,
       guard += fmt::format("tag{} == {}", p, c.idx[d++] + 1);
     }
     fwdc += fmt::format("        if ({}) then\n", guard);
-    fwdc += fmt::format("            r = {}(self, args)\n", c.fwd);
+    fwdc += fmt::format("            r = {}(self, args{})\n", c.fwd,
+                        fwd_kwds ? ", kwds" : "");
     fwdc += "            return\n";
     fwdc += "        end if\n";
   }
@@ -277,9 +278,10 @@ str_t gen_instantiated_function(fnt_info_t const &fi, module_info_t const &m,
   } while (next_combo(idx, plan.types.size()));
 
   fills += method_row("module_methods", ++n, strings.intern(pyname), dispatcher,
-                      "METH_VARARGS");
+                      "METH_VARARGS + METH_KEYWORDS");
   procedures += gen_dispatcher(dispatcher, pyname, /*self_poly=*/false,
-                               plan.poly_pos, plan.types, combos, strings);
+                               plan.poly_pos, plan.types, combos, strings,
+                               /*fwd_kwds=*/true);
   return procedures;
 }
 
@@ -331,10 +333,13 @@ str_t gen_instantiated_method(dtype_info_t const &home, fnt_info_t const &mth,
     combos.push_back({idx, wname});
   } while (next_combo(idx, plan.types.size()));
 
+  // No-arg specifics keep the two-parameter METH_NOARGS signature.
   procedures += gen_dispatcher(dispatcher, pyname, /*self_poly=*/true,
-                               plan.poly_pos, plan.types, combos, strings);
+                               plan.poly_pos, plan.types, combos, strings,
+                               /*fwd_kwds=*/!args.empty());
 
-  str_t const flags = args.empty() ? "METH_NOARGS" : "METH_VARARGS";
+  str_t const flags =
+      args.empty() ? "METH_NOARGS" : "METH_VARARGS + METH_KEYWORDS";
   for (sema::Symbol const *ti : plan.types) {
     if (ti != home.ptr && has_own_binding(m, *ti, pyname))
       continue;

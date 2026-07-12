@@ -43,14 +43,14 @@ def test_instantiate_directive(builder):
 
     # the dispatcher owns the function's exposed name; the per-type specifics
     # exist alongside and are classified by runtime tp_name
-    assert "function py_mod_area_of(self, args)" in src
+    assert "function py_mod_area_of(self, args, kwds)" in src
     assert "py_mod_area_of__shape_t" in src
     assert "py_mod_area_of__circle_t" in src
     assert 'c_string_eq(pytype%tp_name, "poly.Circle_t")' in src
     assert "unexpected argument type for area_of" in src
 
     # class(*) dispatches the same way
-    assert "function py_mod_type_code(self, args)" in src
+    assert "function py_mod_type_code(self, args, kwds)" in src
 
     # the TBP dispatcher is registered in the derived type's method table too
     # (whoami is declared on shape_t only; Python classes do not inherit)
