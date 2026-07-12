@@ -10,8 +10,9 @@ module generic_mod
     ! dispatch over scalar category, derived type, and array dtype/rank;
     ! each specific returns a distinct code so tests can tell which ran
     interface describe
-        module procedure describe_int, describe_real, describe_thing, &
-                         describe_vec, describe_mat, describe_ivec
+        module procedure describe_int, describe_real, describe_cmplx, &
+                         describe_thing, describe_vec, describe_mat, &
+                         describe_ivec
     end interface
 
     ! overloads differing only in scalar kind collapse to the widest one
@@ -41,6 +42,12 @@ contains
         real(8), intent(in) :: x
         integer(4) :: k
         k = 2
+    end function
+
+    function describe_cmplx(z) result(k)
+        complex(8), intent(in) :: z
+        integer(4) :: k
+        k = 7
     end function
 
     function describe_thing(t) result(k)

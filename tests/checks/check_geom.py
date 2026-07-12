@@ -1,6 +1,8 @@
 import gc
 import sys
 
+import numpy as np
+
 sys.path.insert(0, ".")
 import geom
 
@@ -99,6 +101,29 @@ try:
 except TypeError:
     check("logical setter type error", True)
 check("failed logical set leaves field", pv.visible is False)
+
+# --- complex field: round-trip, failed set leaves the field ---
+check("complex field default", pv.phase == 0j)
+pv.phase = 2 - 3j
+check("complex field round-trip", pv.phase == 2 - 3j)
+try:
+    pv.phase = "east"
+    check("complex setter type error", False)
+except TypeError:
+    check("complex setter type error", True)
+check("failed complex set leaves field", pv.phase == 2 - 3j)
+
+# --- complex allocatable component: numpy-copy property ---
+pv.modes = np.array([1j, 2, 3 - 1j], dtype=np.complex128)
+check("complex array field round-trip",
+      np.array_equal(pv.modes, [1j, 2, 3 - 1j]))
+check("complex array field dtype", pv.modes.dtype == np.complex128)
+# negative-stride source: exercises the byte->element stride math (16-byte
+# elements) in the setter
+rev = np.array([1 + 1j, 2 + 2j, 3 + 3j], dtype=np.complex128)[::-1]
+pv.modes = rev
+check("complex array field reversed stride",
+      np.array_equal(pv.modes, [3 + 3j, 2 + 2j, 1 + 1j]))
 
 # --- ctor kwarg type error ---
 try:

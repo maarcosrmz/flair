@@ -9,7 +9,9 @@ module geom_mod
         real(8) :: y = 2d0
         character(8) :: name = "origin"
         logical :: visible = .true.
+        complex(8) :: phase = (0d0, 0d0)
         real(8), allocatable :: tags(:)
+        complex(8), allocatable :: modes(:)
     end type
 
     ! ctor case: generic interface named like the type

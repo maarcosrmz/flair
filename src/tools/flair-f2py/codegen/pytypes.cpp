@@ -31,7 +31,19 @@ str_t npy(Fortran::semantics::DeclTypeSpec const &t) {
     case 8:
       return "NPY_FLOAT64";
     }
+  if (*cat == TypeCategory::Complex)
+    switch (k) {
+    case 4:
+      return "NPY_COMPLEX64";
+    case 8:
+      return "NPY_COMPLEX128";
+    }
   return "NPY_NOTYPE";
+}
+
+int elem_bytes(Fortran::semantics::DeclTypeSpec const &t) {
+  int const k = flu::kind_of(t);
+  return flu::category(t) == TypeCategory::Complex ? 2 * k : k;
 }
 
 bool intrinsic_supported(Fortran::semantics::DeclTypeSpec const &t) {
@@ -41,6 +53,7 @@ bool intrinsic_supported(Fortran::semantics::DeclTypeSpec const &t) {
   int const k = flu::kind_of(t);
   switch (*cat) {
   case TypeCategory::Real:
+  case TypeCategory::Complex:
     return k == 4 || k == 8;
   case TypeCategory::Integer:
   case TypeCategory::Logical:
@@ -62,6 +75,9 @@ str_t to_py(Fortran::semantics::DeclTypeSpec const &t, str_t const &expr) {
     switch (*cat) {
     case TypeCategory::Real:
       return "PyFloat_FromDouble(real(" + expr + ", c_double))";
+    case TypeCategory::Complex:
+      return "FLAIR_PyObject_from_dcomplex(cmplx(" + expr +
+             ", kind=c_double_complex))";
     case TypeCategory::Integer:
       return "PyLong_FromLongLong(int(" + expr + ", c_long_long))";
     case TypeCategory::Logical:
@@ -80,6 +96,8 @@ str_t py_helper(Fortran::semantics::DeclTypeSpec const &t) {
     switch (*cat) {
     case TypeCategory::Real:
       return "FLAIR_double_from_PyObject";
+    case TypeCategory::Complex:
+      return "FLAIR_dcomplex_from_PyObject";
     case TypeCategory::Integer:
       return "FLAIR_int64_from_PyObject";
     case TypeCategory::Logical:
@@ -98,6 +116,8 @@ str_t py_ctype(Fortran::semantics::DeclTypeSpec const &t) {
     switch (*cat) {
     case TypeCategory::Real:
       return "real(c_double)";
+    case TypeCategory::Complex:
+      return "complex(c_double_complex)";
     case TypeCategory::Integer:
       return "integer(c_long_long)";
     case TypeCategory::Logical:
@@ -116,6 +136,9 @@ str_t narrow(Fortran::semantics::DeclTypeSpec const &t, str_t const &var) {
     switch (*cat) {
     case TypeCategory::Real:
       return "real(" + var + ", " + std::to_string(flu::kind_of(t)) + ")";
+    case TypeCategory::Complex:
+      return "cmplx(" + var + ", kind=" + std::to_string(flu::kind_of(t)) +
+             ")";
     case TypeCategory::Integer:
       return "int(" + var + ", " + std::to_string(flu::kind_of(t)) + ")";
     case TypeCategory::Logical:
@@ -135,6 +158,8 @@ str_t ftype(Fortran::semantics::DeclTypeSpec const &t) {
     switch (*cat) {
     case TypeCategory::Real:
       return "real(" + std::to_string(flu::kind_of(t)) + ")";
+    case TypeCategory::Complex:
+      return "complex(" + std::to_string(flu::kind_of(t)) + ")";
     case TypeCategory::Integer:
       return "integer(" + std::to_string(flu::kind_of(t)) + ")";
     case TypeCategory::Logical:

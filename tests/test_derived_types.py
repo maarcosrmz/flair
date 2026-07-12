@@ -24,7 +24,12 @@ def test_geom(builder):
     # scalar getsets and the numpy-copy property for the allocatable component
     assert "py_point_t_get_x" in src
     assert "py_point_t_get_y" in src
+    assert "py_point_t_get_phase" in src
     assert "py_point_t_get_tags" in src
+    assert "py_point_t_get_modes" in src
+    # complex(8) elements are 16 bytes in the numpy-property stride math
+    assert "NPY_COMPLEX128" in src
+    assert "/ 16_c_ptrdiff_t" in src
 
     # keyword-only __init__: positional args rejected with TypeError
     assert "takes no positional arguments" in src

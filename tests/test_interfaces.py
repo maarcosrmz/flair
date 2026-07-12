@@ -20,6 +20,13 @@ def test_generic_interfaces(builder):
     assert "PyArray_NDIM" in src
     assert "PyArray_DESCR" in src
 
+    # scalar probes convert with the checked helpers, complex last (its
+    # converter also accepts ints and floats)
+    assert re.search(
+        r"FLAIR_double_from_PyObject.*\n(.*\n)*?.*FLAIR_dcomplex_from_PyObject",
+        src,
+    )
+
     # fallback when no overload matches
     assert "unexpected argument type for describe" in src
 

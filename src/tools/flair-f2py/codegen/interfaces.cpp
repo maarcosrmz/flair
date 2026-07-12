@@ -34,12 +34,12 @@ static constexpr char tpl_dispatch[] = {
 
 namespace {
 
-// Runtime-distinguishable classification of one dummy argument. Integer/real
+// Runtime-distinguishable classification of one dummy argument. Numeric
 // scalars are distinguished only by category (not kind): Python cannot see a
 // Fortran integer kind, so int32/int64 overloads collapse. Arrays keep their
 // numpy dtype + rank, both of which *are* visible at runtime.
 struct arg_tag_t {
-  enum kind_t { Int, Real, Bool, Str, Derived, Array } kind;
+  enum kind_t { Int, Real, Cmplx, Bool, Str, Derived, Array } kind;
   str_t derived; // Derived: tp_name literal "<modpy>.<Class>"
   str_t npy;     // Array: numpy type code constant
   int rank = 0;  // Array: rank
@@ -54,6 +54,8 @@ str_t tag_key(arg_tag_t const &t) {
     return "i";
   case arg_tag_t::Real:
     return "r";
+  case arg_tag_t::Cmplx:
+    return "z";
   case arg_tag_t::Bool:
     return "b";
   case arg_tag_t::Str:
@@ -101,6 +103,9 @@ bool build_tags(semantics::Symbol const &spec, std::vector<arg_tag_t> &out) {
       switch (*flu::category(*t)) {
       case Fortran::common::TypeCategory::Real:
         tag.kind = arg_tag_t::Real;
+        break;
+      case Fortran::common::TypeCategory::Complex:
+        tag.kind = arg_tag_t::Cmplx;
         break;
       case Fortran::common::TypeCategory::Logical:
         tag.kind = arg_tag_t::Bool;
@@ -206,7 +211,7 @@ str_t gen_interface_wrapper(
   };
 
   bool any_derived = false, any_array = false, any_int = false,
-       any_real = false, any_str = false;
+       any_real = false, any_cmplx = false, any_str = false;
   for (size_t p : disc)
     for (auto const &c : uniq)
       switch (c.tags[p].kind) {
@@ -221,6 +226,9 @@ str_t gen_interface_wrapper(
         break;
       case arg_tag_t::Real:
         any_real = true;
+        break;
+      case arg_tag_t::Cmplx:
+        any_cmplx = true;
         break;
       case arg_tag_t::Str:
         any_str = true;
@@ -243,7 +251,9 @@ str_t gen_interface_wrapper(
     decls += "        integer(c_long_long) :: val_i\n";
   if (any_real)
     decls += "        real(c_double) :: val_r\n";
-  if (any_int || any_real)
+  if (any_cmplx)
+    decls += "        complex(c_double_complex) :: val_z\n";
+  if (any_int || any_real || any_cmplx)
     decls += "        logical :: ok\n";
   if (any_array) {
     decls += "        integer(c_int) :: nd\n";
@@ -255,7 +265,8 @@ str_t gen_interface_wrapper(
   str_t cls;
   for (size_t p : disc) {
     // present tags at this position
-    bool d = false, a = false, ii = false, rr = false, bb = false, ss = false;
+    bool d = false, a = false, ii = false, rr = false, zz = false, bb = false,
+         ss = false;
     std::vector<arg_tag_t const *> derived_tags, array_tags;
     auto push_uniq = [](std::vector<arg_tag_t const *> &v, arg_tag_t const &t) {
       for (arg_tag_t const *e : v)
@@ -280,6 +291,9 @@ str_t gen_interface_wrapper(
       case arg_tag_t::Real:
         rr = true;
         break;
+      case arg_tag_t::Cmplx:
+        zz = true;
+        break;
       case arg_tag_t::Bool:
         bb = true;
         break;
@@ -301,9 +315,10 @@ str_t gen_interface_wrapper(
     // Scalar probe chain, one nested block per present kind. Exact-type
     // tests (bool identity, str tp_name) need no exception dance and come
     // first; bool must precede the int probe because PyLong accepts
-    // True/False. Then int before real, as before. The str probe relies on
-    // pytype, set by derived_or_prim below.
-    enum probe_t { PBool, PStr, PInt, PReal };
+    // True/False. Then int before real before complex: each converter down
+    // the chain also accepts everything the earlier ones do. The str probe
+    // relies on pytype, set by derived_or_prim below.
+    enum probe_t { PBool, PStr, PInt, PReal, PCmplx };
     std::vector<probe_t> probes;
     if (bb)
       probes.push_back(PBool);
@@ -313,6 +328,8 @@ str_t gen_interface_wrapper(
       probes.push_back(PInt);
     if (rr)
       probes.push_back(PReal);
+    if (zz)
+      probes.push_back(PCmplx);
     std::function<str_t(size_t, str_t const &)> chain =
         [&](size_t j, str_t const &ind) -> str_t {
       if (j >= probes.size())
@@ -340,13 +357,22 @@ str_t gen_interface_wrapper(
         break;
       }
       case PInt:
-      case PReal: {
-        bool const is_int = probes[j] == PInt;
+      case PReal:
+      case PCmplx: {
+        struct probe_conv_t {
+          char const *var, *helper;
+          arg_tag_t::kind_t kind;
+        };
+        probe_conv_t const conv = probes[j] == PInt
+                                      ? probe_conv_t{"i", "int64", arg_tag_t::Int}
+                                  : probes[j] == PReal
+                                      ? probe_conv_t{"r", "double", arg_tag_t::Real}
+                                      : probe_conv_t{"z", "dcomplex",
+                                                     arg_tag_t::Cmplx};
         s += fmt::format("{}val_{} = FLAIR_{}_from_PyObject(a{}, ok)\n", ind,
-                         is_int ? "i" : "r", is_int ? "int64" : "double", p);
+                         conv.var, conv.helper, p);
         s += fmt::format("{}if (ok) then\n", ind);
-        s += fmt::format("{}    tag{} = {}\n", ind, p,
-                         code_kind(is_int ? arg_tag_t::Int : arg_tag_t::Real));
+        s += fmt::format("{}    tag{} = {}\n", ind, p, code_kind(conv.kind));
         s += fmt::format("{}else\n", ind);
         s += fmt::format("{}    call PyErr_Clear()\n", ind);
         s += chain(j + 1, ind + "    ");
@@ -371,7 +397,7 @@ str_t gen_interface_wrapper(
           s += fmt::format("{}    tag{} = {}\n", ind, p, code_of(*t));
           first = false;
         }
-        if (ii || rr || bb || ss) {
+        if (ii || rr || zz || bb || ss) {
           s += fmt::format("{}else\n", ind);
           s += prim(ind + "    ");
         }

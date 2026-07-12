@@ -12,12 +12,16 @@ using str_t = std::string;
 
 // Fortran -> Python/NumPy type mapping, built on the flu type queries.
 
-// NumPy element code for a supported intrinsic real/integer; "NPY_NOTYPE"
-// otherwise.
+// NumPy element code for a supported intrinsic real/integer/complex;
+// "NPY_NOTYPE" otherwise.
 str_t npy(Fortran::semantics::DeclTypeSpec const &t);
 
-// The intrinsic *scalar* types we wrap: real(4/8), integer(1/2/4/8),
-// logical(1/2/4/8), default-kind character.
+// Storage size of one element in bytes (== the Fortran kind, doubled for
+// complex). Used to turn NumPy byte strides into element strides.
+int elem_bytes(Fortran::semantics::DeclTypeSpec const &t);
+
+// The intrinsic *scalar* types we wrap: real(4/8), complex(4/8),
+// integer(1/2/4/8), logical(1/2/4/8), default-kind character.
 bool intrinsic_supported(Fortran::semantics::DeclTypeSpec const &t);
 
 // The intrinsic *array element* types we wrap (== has a NumPy dtype).

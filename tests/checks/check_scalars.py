@@ -50,6 +50,20 @@ try:
 except OverflowError:
     check("oversized int overflows", True)
 
+# complex(8): args and result map to Python complex
+check("complex(8) function", scalars.cmul(1 + 2j, 3 + 4j) == (1 + 2j) * (3 + 4j))
+check("complex result is complex", isinstance(scalars.cmul(1j, 1j), complex))
+# PyComplex_*AsDouble semantics: float/int convert, imaginary part 0
+check("complex arg accepts float", scalars.cmul(2.0, 3 + 1j) == 6 + 2j)
+check("complex arg accepts int", scalars.cmul(2, 1j) == 2j)
+check("complex(4) round-trip", abs(scalars.cconj4(1.5 + 0.25j) - (1.5 - 0.25j)) < 1e-6)
+
+try:
+    scalars.cmul(1j, "x")
+    check("complex arg rejects str", False)
+except TypeError:
+    check("complex arg rejects str", True)
+
 # logical: strict bool in, bool out
 check("logical round-trip", scalars.toggle(True) is False)
 check("logical(1) result", scalars.is_neg(-2.0) is True)

@@ -49,6 +49,8 @@ module python_api_mod
     integer(c_int), parameter :: NPY_INT64  =  7  ! NPY_LONG
     integer(c_int), parameter :: NPY_FLOAT32 = 11 ! NPY_FLOAT
     integer(c_int), parameter :: NPY_FLOAT64 = 12 ! NPY_DOUBLE
+    integer(c_int), parameter :: NPY_COMPLEX64  = 14 ! NPY_CFLOAT
+    integer(c_int), parameter :: NPY_COMPLEX128 = 15 ! NPY_CDOUBLE
 
     ! Array flags
     integer(c_int), parameter :: NPY_ARRAY_C_CONTIGUOUS = 1     ! 0x001
@@ -182,6 +184,25 @@ module python_api_mod
         function PyFloat_FromDouble(v) bind(C, name="PyFloat_FromDouble") result(r)
             import :: c_ptr, c_double
             real(c_double), value :: v
+            type(c_ptr) :: r
+        end function
+
+        ! --- complex ---
+        function PyComplex_RealAsDouble(op) bind(C, name="PyComplex_RealAsDouble") result(r)
+            import :: c_ptr, c_double
+            type(c_ptr), value :: op
+            real(c_double) :: r
+        end function
+
+        function PyComplex_ImagAsDouble(op) bind(C, name="PyComplex_ImagAsDouble") result(r)
+            import :: c_ptr, c_double
+            type(c_ptr), value :: op
+            real(c_double) :: r
+        end function
+
+        function PyComplex_FromDoubles(re, im) bind(C, name="PyComplex_FromDoubles") result(r)
+            import :: c_ptr, c_double
+            real(c_double), value :: re, im
             type(c_ptr) :: r
         end function
 
@@ -733,6 +754,23 @@ contains
         ok = .not. (v == -1_c_long_long .and. c_associated(PyErr_Occurred()))
     end function
 
+    ! complex, float, int and anything else PyComplex_*AsDouble accepts
+    ! (__complex__/__float__/__index__) convert; the imaginary part of a
+    ! non-complex is 0.
+    function FLAIR_dcomplex_from_PyObject(obj, ok) result(v)
+        type(c_ptr), value   :: obj
+        logical, intent(out) :: ok
+        complex(c_double_complex) :: v
+        real(c_double) :: re, im
+        v = cmplx(0, 0, kind=c_double_complex)
+        re = PyComplex_RealAsDouble(obj)
+        ok = .not. (re == -1.0_c_double .and. c_associated(PyErr_Occurred()))
+        if (.not. ok) return
+        im = PyComplex_ImagAsDouble(obj)
+        ok = .not. (im == -1.0_c_double .and. c_associated(PyErr_Occurred()))
+        if (ok) v = cmplx(re, im, kind=c_double_complex)
+    end function
+
     ! Strict: only True/False convert (bool is an int subclass, so a truthiness
     ! or PyLong-based conversion would also accept integers). True and False
     ! are singletons, so identity comparison is the exact-type check; unlike
@@ -780,6 +818,14 @@ contains
         character(kind=c_char, len=max(1, len(s))), target :: buf
         buf = s
         r = PyUnicode_FromStringAndSize(c_loc(buf), int(len(s), c_ptrdiff_t))
+    end function
+
+    ! New complex from a Fortran complex value (a helper rather than an inline
+    ! PyComplex_FromDoubles call so the wrapped expression is evaluated once).
+    function FLAIR_PyObject_from_dcomplex(z) result(r)
+        complex(c_double_complex), intent(in) :: z
+        type(c_ptr) :: r
+        r = PyComplex_FromDoubles(real(z, c_double), aimag(z))
     end function
 
 end module python_api_mod

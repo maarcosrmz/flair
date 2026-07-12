@@ -153,7 +153,8 @@ static str_t ctor_new_body(str_t const &pf) {
 static str_t arg_check_decls(std::vector<sema::Symbol const *> const &accepted,
                              module_info_t const &m) {
   str_t d;
-  bool any_real = false, any_int = false, any_logical = false, any_char = false;
+  bool any_real = false, any_int = false, any_logical = false,
+       any_char = false, any_complex = false;
   d += "        type(c_ptr) :: arg\n";
   for (sema::Symbol const *s : accepted) {
     str_t const nm = s->name().ToString();
@@ -171,6 +172,9 @@ static str_t arg_check_decls(std::vector<sema::Symbol const *> const &accepted,
       switch (*flu::category(*s->GetType())) {
       case Fortran::common::TypeCategory::Real:
         any_real = true;
+        break;
+      case Fortran::common::TypeCategory::Complex:
+        any_complex = true;
         break;
       case Fortran::common::TypeCategory::Logical:
         any_logical = true;
@@ -192,13 +196,15 @@ static str_t arg_check_decls(std::vector<sema::Symbol const *> const &accepted,
   // checked before the next starts, so a single set suffices).
   if (any_real)
     d += "        real(c_double) :: kw_vr\n";
+  if (any_complex)
+    d += "        complex(c_double_complex) :: kw_vz\n";
   if (any_int)
     d += "        integer(c_long_long) :: kw_vi\n";
   if (any_logical)
     d += "        logical(c_bool) :: kw_vl\n";
   if (any_char)
     d += "        character(:), allocatable :: kw_vc\n";
-  if (any_real || any_int || any_logical || any_char)
+  if (any_real || any_complex || any_int || any_logical || any_char)
     d += "        logical :: kw_ok\n";
   return d;
 }
@@ -305,6 +311,9 @@ static str_t arg_check_stmts(std::vector<sema::Symbol const *> const &accepted,
       switch (*flu::category(*t)) {
       case Fortran::common::TypeCategory::Real:
         scratch = "kw_vr";
+        break;
+      case Fortran::common::TypeCategory::Complex:
+        scratch = "kw_vz";
         break;
       case Fortran::common::TypeCategory::Logical:
         scratch = "kw_vl";
@@ -652,7 +661,7 @@ str_t gen_getset(dtype_info_t const &dt, sema::Symbol const &comp,
                   {"field", field},
                   {"npy", npy(*t)},
                   {"raw_type", ftype(*t)},
-                  {"elem_bytes", std::to_string(flu::kind_of(*t))},
+                  {"elem_bytes", std::to_string(elem_bytes(*t))},
                   {"s_del", s_del},
                   {"s_unassoc",
                    strings.intern("cannot set unassociated " + field)},
@@ -668,7 +677,7 @@ str_t gen_getset(dtype_info_t const &dt, sema::Symbol const &comp,
                    {"field", field},
                    {"npy", npy(*t)},
                    {"raw_type", ftype(*t)},
-                   {"elem_bytes", std::to_string(flu::kind_of(*t))},
+                   {"elem_bytes", std::to_string(elem_bytes(*t))},
                    {"s_del", s_del}}) +
            "\n";
   }

@@ -46,4 +46,18 @@ contains
         s = sum(v)
     end function
 
+    ! complex(8) input array
+    function zsum(v) result(s)
+        complex(8), intent(in) :: v(:)
+        complex(8) :: s
+        s = sum(v)
+    end function
+
+    ! complex(8) intent(inout): in-place scale by a complex factor
+    subroutine zscale(x, f)
+        complex(8), intent(inout) :: x(:)
+        complex(8), intent(in) :: f
+        x = x * f
+    end subroutine
+
 end module

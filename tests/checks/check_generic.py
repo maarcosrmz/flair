@@ -14,9 +14,11 @@ def check(name, cond):
         failures.append(name)
 
 
-# scalar category dispatch; ints probe first even though floats accept ints
+# scalar category dispatch; ints probe first even though floats accept ints,
+# and floats before complex even though complex accepts both
 check("int overload", generic.describe(3) == 1)
 check("real overload", generic.describe(2.5) == 2)
+check("complex overload", generic.describe(1 + 2j) == 7)
 
 # derived-type dispatch via tp_name
 check("derived overload", generic.describe(generic.Thing_t()) == 3)

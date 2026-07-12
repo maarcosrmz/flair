@@ -55,6 +55,20 @@ contains
         b = x < 0d0
     end function
 
+    ! complex(8) arguments and result
+    function cmul(a, b) result(c)
+        complex(8), intent(in) :: a, b
+        complex(8) :: c
+        c = a * b
+    end function
+
+    ! complex(4) argument and result: exercises kind conversion in the wrapper
+    function cconj4(z) result(c)
+        complex(4), intent(in) :: z
+        complex(4) :: c
+        c = conjg(z)
+    end function
+
     ! assumed-length character in, deferred-length result
     function shout(s) result(t)
         character(*), intent(in) :: s

@@ -11,12 +11,16 @@ def test_scalars(builder):
     # arguments go through the checked converters and bail on failure
     assert "x0 = FLAIR_double_from_PyObject(a0, ok0)" in src
     assert "x0 = FLAIR_int64_from_PyObject(a0, ok0)" in src
+    assert "x0 = FLAIR_dcomplex_from_PyObject(a0, ok0)" in src
     assert "x0 = FLAIR_logical_from_PyObject(a0, ok0)" in src
     assert "x0 = FLAIR_str_from_PyObject(a0, ok0)" in src
     assert "if (.not. ok0) then" in src
+    # complex results go out through the single-evaluation helper
+    assert "FLAIR_PyObject_from_dcomplex" in src
     # converter results are narrowed to the dummy's kind at the call
     assert "real(x0, 4)" in src
     assert "int(x0, 4)" in src
+    assert "cmplx(x0, kind=4)" in src
     # logical results go out as real bools
     assert "PyBool_FromLong" in src
     # explicit-length character dummy: fixed local + length guard

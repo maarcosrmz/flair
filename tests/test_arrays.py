@@ -23,6 +23,7 @@ def test_arrays(builder):
     assert "NPY_FLOAT64" in src
     assert "NPY_INT32" in src
     assert "NPY_INT64" in src
+    assert "NPY_COMPLEX128" in src
 
     # rank-2 shape wiring
     assert "shp0(2) = PyArray_DIM(arr0, 1_c_int)" in src

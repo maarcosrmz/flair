@@ -43,6 +43,15 @@ check("list coercion", arrays.sum1([1.0, 2.0, 3.5]) == 6.5)
 v = np.array([2**40, 1, 2], dtype=np.int64)
 check("int64 array", arrays.isum(v) == 2**40 + 3)
 
+# complex128 input array
+z = np.array([1 + 1j, 2 - 1j], dtype=np.complex128)
+check("complex128 array", arrays.zsum(z) == 3 + 0j)
+
+# complex128 intent(inout), Fortran-ordered: in-place mutation
+zf = np.asfortranarray([1 + 1j, 2 - 1j], dtype=np.complex128)
+arrays.zscale(zf, 1j)
+check("complex128 inout", np.array_equal(zf, [-1 + 1j, 1 + 2j]))
+
 # rank mismatch raises instead of crashing
 try:
     arrays.sum1(np.zeros((2, 2)))
