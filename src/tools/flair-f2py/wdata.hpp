@@ -54,6 +54,7 @@ struct module_info_t {
   std::map<str_t, dtype_info_t> derived_types;
   std::vector<fnt_info_t> functions;
   std::vector<iface_info_t> interfaces;
+  std::vector<sym_ptr_t> variables; // public module variables (non-parameter)
 
   module_info_t(str_t const &name) : name(name) {}
 };

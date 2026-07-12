@@ -19,6 +19,7 @@ module python_api_mod
     ! PyMethodDef.ml_flags
     integer(c_int), parameter :: METH_VARARGS = 1
     integer(c_int), parameter :: METH_NOARGS  = 4
+    integer(c_int), parameter :: METH_O       = 8
 
     ! PyType_Spec.flags
     integer(c_int), parameter :: Py_TPFLAGS_DEFAULT = 0
@@ -51,6 +52,7 @@ module python_api_mod
     integer(c_int), parameter :: NPY_FLOAT64 = 12 ! NPY_DOUBLE
     integer(c_int), parameter :: NPY_COMPLEX64  = 14 ! NPY_CFLOAT
     integer(c_int), parameter :: NPY_COMPLEX128 = 15 ! NPY_CDOUBLE
+    integer(c_int), parameter :: NPY_STRING     = 18 ! flexible bytes; itemsize = element length
 
     ! Array flags
     integer(c_int), parameter :: NPY_ARRAY_C_CONTIGUOUS = 1     ! 0x001
@@ -504,6 +506,15 @@ module python_api_mod
             type(c_ptr) :: r
         end function
 
+        ! PyArray_New: builds the descr from type_num + itemsize (flexible types)
+        function PyArray_New_iface(subtype, nd, dims, type_num, strides, data, &
+                                   itemsize, flags, obj) bind(C) result(r)
+            import :: c_ptr, c_int
+            type(c_ptr),    value :: subtype, dims, strides, data, obj
+            integer(c_int), value :: nd, type_num, itemsize, flags
+            type(c_ptr) :: r
+        end function
+
         ! PyArray_DescrFromType: returns a new reference
         function PyArray_DescrFromType_iface(type_num) bind(C) result(r)
             import :: c_ptr, c_int
@@ -545,6 +556,7 @@ module python_api_mod
     procedure(PyArray_GetNDArrayCVersion_iface),  pointer :: PyArray_GetNDArrayCVersion
     procedure(PyArray_GetNDArrayCVersion_iface),  pointer :: PyArray_GetNDArrayCFeatureVersion
     procedure(PyArray_NewFromDescr_iface),        pointer :: PyArray_NewFromDescr
+    procedure(PyArray_New_iface),                 pointer :: PyArray_New
     procedure(PyArray_DescrFromType_iface),       pointer :: PyArray_DescrFromType
     procedure(PyArray_SetBaseObject_iface),       pointer :: PyArray_SetBaseObject
     procedure(PyArray_FromAny_iface),             pointer :: PyArray_FromAny
@@ -564,6 +576,7 @@ contains
         type(c_funptr), save :: fp_PyArray_GetNDArrayCVersion        = c_null_funptr
         type(c_funptr), save :: fp_PyArray_GetNDArrayCFeatureVersion = c_null_funptr
         type(c_funptr), save :: fp_PyArray_NewFromDescr       = c_null_funptr
+        type(c_funptr), save :: fp_PyArray_New                = c_null_funptr
         type(c_funptr), save :: fp_PyArray_DescrFromType      = c_null_funptr
         type(c_funptr), save :: fp_PyArray_SetBaseObject      = c_null_funptr
         type(c_funptr), save :: fp_PyArray_FromAny            = c_null_funptr
@@ -605,6 +618,7 @@ contains
         fp_PyArray_GetNDArrayCVersion        = transfer(api(1),   c_null_funptr); ! C index 0
         fp_PyArray_DescrFromType             = transfer(api(46),  c_null_funptr)  ! C index 45
         fp_PyArray_FromAny                   = transfer(api(70),  c_null_funptr)  ! C index 69
+        fp_PyArray_New                       = transfer(api(94),  c_null_funptr)  ! C index 93
         fp_PyArray_NewFromDescr              = transfer(api(95),  c_null_funptr)  ! C index 94
         fp_PyArray_GetNDArrayCFeatureVersion = transfer(api(212), c_null_funptr); ! C index 211
         fp_PyArray_SetBaseObject             = transfer(api(283), c_null_funptr)  ! C index 282
@@ -613,6 +627,7 @@ contains
         call c_f_procpointer(fp_PyArray_GetNDArrayCVersion, PyArray_GetNDArrayCVersion)
         call c_f_procpointer(fp_PyArray_DescrFromType,      PyArray_DescrFromType)
         call c_f_procpointer(fp_PyArray_FromAny,            PyArray_FromAny)
+        call c_f_procpointer(fp_PyArray_New,                PyArray_New)
         call c_f_procpointer(fp_PyArray_NewFromDescr,       PyArray_NewFromDescr)
         call c_f_procpointer(fp_PyArray_GetNDArrayCFeatureVersion, PyArray_GetNDArrayCFeatureVersion)
         call c_f_procpointer(fp_PyArray_SetBaseObject,      PyArray_SetBaseObject)

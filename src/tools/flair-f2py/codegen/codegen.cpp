@@ -13,6 +13,7 @@
 #include "functions.hpp"
 #include "instantiate.hpp"
 #include "interfaces.hpp"
+#include "modvars.hpp"
 #include "utils.hpp"
 
 namespace codegen {
@@ -39,7 +40,8 @@ str_t module_pyname(str_t const &m) {
 }
 
 bool has_wrappable(module_info_t const &m) {
-  return !m.derived_types.empty() || !m.functions.empty();
+  return !m.derived_types.empty() || !m.functions.empty() ||
+         !m.variables.empty();
 }
 
 str_t codegen_module(module_info_t const &m_in) {
@@ -205,6 +207,12 @@ str_t codegen_module(module_info_t const &m_in) {
     procedures += gen_interface_wrapper(*iface.ptr, generated, strings,
                                         &modfn_fills, nmod);
   }
+
+  // ---- module variables (live views / __getattr__ values) -------------------
+  str_t var_init_decls, var_creates;
+  procedures += gen_module_vars(m, strings, &modfn_fills, nmod, ext_types,
+                                var_init_decls, var_creates);
+
   modfn_fills += method_sentinel("module_methods", nmod + 1);
 
   table_decls += fmt::format(
@@ -237,6 +245,7 @@ str_t codegen_module(module_info_t const &m_in) {
   pyinit += "        type(c_ptr) :: mod_ptr, type_ptr\n";
   pyinit += "        integer(c_int) :: rc\n";
   pyinit += pyinit_decls;
+  pyinit += var_init_decls;
   pyinit += "\n        if (import_array() < 0) then\n            r = "
             "c_null_ptr\n            return\n        end if\n\n";
   pyinit += pyinit_fills;
@@ -246,6 +255,7 @@ str_t codegen_module(module_info_t const &m_in) {
   pyinit += "        if (.not. c_associated(mod_ptr)) then\n            r = "
             "c_null_ptr\n            return\n        end if\n\n";
   pyinit += pyinit_creates;
+  pyinit += var_creates;
   pyinit += "        r = mod_ptr\n";
   pyinit += "    end function\n";
 

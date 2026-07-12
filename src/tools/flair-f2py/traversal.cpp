@@ -158,6 +158,17 @@ void traverse_module(sema::Symbol const &mod_sym, state &s) {
     llvm::for_each(dtype_scope->GetSymbols(), match_proc_binding);
   };
 
+  auto const match_variable = [&s](sema::Symbol const &sym) {
+    if (s.ignore(sym))
+      return;
+    if (not sym.has<sema::ObjectEntityDetails>())
+      return;
+    // Named constants have no storage to alias (and cannot change anyway).
+    if (sym.attrs().test(sema::Attr::PARAMETER))
+      return;
+    s.mi.variables.push_back(&sym);
+  };
+
   // Predicate to filter out compiler-generated entities
   auto const is_not_compiler_generated = [](sema::Symbol const &s) {
     std::string const n = s.name().ToString();
@@ -174,6 +185,7 @@ void traverse_module(sema::Symbol const &mod_sym, state &s) {
   llvm::for_each(filtered_symbols, match_dtype);
   llvm::for_each(filtered_symbols, match_interface);
   llvm::for_each(filtered_symbols, match_subprogram);
+  llvm::for_each(filtered_symbols, match_variable);
 }
 
 // Returns a pointer to the already matched derived type in module_info_t,
