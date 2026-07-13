@@ -60,12 +60,19 @@ bool directive_collector::Pre(const parse::DerivedTypeStmt &stmt) {
 }
 
 void directive_collector::attach(const parse::Name &name) {
+  if (kind != FlairDirective::NONE && name.symbol == nullptr) {
+    flu::emit_warning(context, name.source,
+                      "'flair$' directive on an unresolved name ignored here");
+    kind = FlairDirective::NONE;
+    return;
+  }
+
   switch (kind) {
   case FlairDirective::IGNORE:
-    ignore.insert(name.ToString());
+    ignore.insert(&name.symbol->GetUltimate());
     break;
   case FlairDirective::CALLBACK:
-    callbacks.insert(name.ToString());
+    callbacks.insert(&name.symbol->GetUltimate());
     break;
   case FlairDirective::INSTANTIATE:
     instantiate.insert_or_assign(name.ToString(), std::move(types));

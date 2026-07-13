@@ -10,7 +10,7 @@
 
 // --- state ---
 bool state::ignore(sema::Symbol const &sym) {
-  return ignored.find(sym.name().ToString()) != ignored.end() or
+  return ignored.find(&sym.GetUltimate()) != ignored.end() or
          sym.attrs().test(sema::Attr::PRIVATE) or
          (default_private and not sym.attrs().test(sema::Attr::PUBLIC));
 }
@@ -34,7 +34,7 @@ void traverse_module(sema::Symbol const &mod_sym, state &s);
 void traverse_global_scope(const sema::Scope &root,
                            std::shared_ptr<wdata_t> wdata,
                            sema::SemanticsContext &context) {
-  std::unordered_set<std::string> ignore = wdata->collector->ignore;
+  std::unordered_set<const sema::Symbol *> ignore = wdata->collector->ignore;
   // NOTE: ignore `!flair$ callback` annotated symbols for now
   ignore.insert(wdata->collector->callbacks.begin(),
                 wdata->collector->callbacks.end());
@@ -46,7 +46,7 @@ void traverse_global_scope(const sema::Scope &root,
   for (auto const &[name, sym_ref] : root) {
     sema::Symbol const &sym = sym_ref.get();
     if (not sym.has<sema::ModuleDetails>() or
-        ignore.find(sym.name().ToString()) != ignore.end())
+        ignore.find(&sym.GetUltimate()) != ignore.end())
       continue;
     // If the origin of the module is a .mod file, skip it.
     // Avoids transitive traversal of USEd modules.

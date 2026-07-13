@@ -12,11 +12,13 @@ namespace parse = Fortran::parser;
 
 struct directive_collector {
 public:
-  // Namea of symbols to be ignored
-  std::unordered_set<std::string> ignore;
+  // Symbols to be ignored. Keyed by resolved symbol, not name: the same
+  // name may be declared in several modules of one run, annotated in one
+  // and not the others (the collector walks after name resolution).
+  std::unordered_set<const sema::Symbol *> ignore;
 
-  // Names of callbacks to be wrapped
-  std::unordered_set<std::string> callbacks;
+  // Callback symbols to be wrapped
+  std::unordered_set<const sema::Symbol *> callbacks;
 
   // Maps a procedure name to all the names of (polymorphic) types,
   // for which the procedure should be instantiated in the wrapper

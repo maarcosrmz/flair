@@ -11,7 +11,7 @@ namespace sema = Fortran::semantics;
 
 struct state {
   module_info_t &mi;
-  const std::unordered_set<std::string> &ignored;
+  const std::unordered_set<const sema::Symbol *> &ignored;
   const std::map<std::string, std::unordered_set<std::string>> &instantiate;
   bool default_private = false;
 
