@@ -75,15 +75,20 @@ static parsed_file_t parse_entry(compdb::entry_t const &entry,
 }
 
 std::vector<parsed_file_t> closure_of(
-    std::string const &entry_file, std::vector<compdb::entry_t> const &entries,
+    std::vector<std::string> const &root_files,
+    std::vector<compdb::entry_t> const &entries,
     parse::AllCookedSources &all_cooked, options_factory_t const &options_for) {
-  std::size_t entry_idx = entries.size();
-  for (std::size_t i = 0; i < entries.size(); ++i)
-    if (entries[i].file == entry_file)
-      entry_idx = i;
-  if (entry_idx == entries.size())
-    throw std::runtime_error("entry file '" + entry_file +
-                             "' is not in the compilation database");
+  std::vector<std::size_t> root_indices;
+  for (auto const &root : root_files) {
+    std::size_t idx = entries.size();
+    for (std::size_t i = 0; i < entries.size(); ++i)
+      if (entries[i].file == root)
+        idx = i;
+    if (idx == entries.size())
+      throw std::runtime_error("file '" + root +
+                               "' is not in the compilation database");
+    root_indices.push_back(idx);
+  }
 
   std::map<std::size_t, parsed_file_t> parsed;
   std::map<std::string, std::size_t> module_to_entry;
@@ -146,7 +151,8 @@ std::vector<parsed_file_t> closure_of(
     state[idx] = visit_state::Done;
     order.push_back(idx);
   };
-  visit(entry_idx);
+  for (std::size_t const idx : root_indices)
+    visit(idx);
 
   std::vector<parsed_file_t> result;
   result.reserve(order.size());

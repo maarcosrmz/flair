@@ -56,6 +56,25 @@ def test_compdb_per_entry_defines(builder):
     assert not b.generated_missing("vec")  # discovered through the USE
 
 
+def test_compdb_wrap_outside_entry_closure(builder):
+    """A --wrap file the entry does not USE (e.g. a bindings-only shim
+    module) is a dependency-graph root of its own and still gets wrapped."""
+    b = builder
+    b.add_sources("cfg_mod.F90", "vec_mod.F90")
+    write_compdb(b, [
+        {"command": "gfortran -c -o cfg_mod.o cfg_mod.F90",  # no -DUSE_VEC
+         "file": "cfg_mod.F90"},
+        {"command": "gfortran -c -o vec_mod.o vec_mod.F90",
+         "file": "vec_mod.F90"},
+    ])
+
+    b.flair_compdb("compile_commands.json", "cfg_mod.F90",
+                   wrap=["cfg_mod.F90", "vec_mod.F90"])
+
+    assert "noop" in b.generated("cfg")  # entry parsed without the define
+    assert not b.generated_missing("vec")  # wrapped despite not being USEd
+
+
 def test_compdb_wrap_restriction(builder):
     """--wrap keeps dependency modules resolution-only in compdb mode."""
     b = builder

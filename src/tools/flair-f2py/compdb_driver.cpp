@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstdlib>
 #include <memory>
 #include <stdexcept>
@@ -104,7 +105,17 @@ int run_compdb_mode(std::string const &compdb_path,
     return opts;
   };
 
-  auto files = depgraph::closure_of(entry_abs, entries,
+  // The graph roots are the entry plus every wrap file: a wrap file need not
+  // be in the entry's USE closure (e.g. a bindings-only shim module), but it
+  // must still be parsed to be wrapped.
+  std::vector<std::string> roots{entry_abs};
+  for (auto const &w : wrap_files) {
+    std::string abs = flu::normalized_path(w);
+    if (std::find(roots.begin(), roots.end(), abs) == roots.end())
+      roots.push_back(std::move(abs));
+  }
+
+  auto files = depgraph::closure_of(roots, entries,
                                     flang->getAllCookedSources(), options_for);
 
   auto &SemanticsCtx = flang->createNewSemanticsContext();

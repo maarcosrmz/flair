@@ -26,15 +26,15 @@ struct parsed_file_t {
 using options_factory_t =
     std::function<Fortran::parser::Options(compdb::entry_t const &)>;
 
-// Parse entries lazily outward from `entry_file` (an absolute path that must
-// be in `entries`) and return its USE closure in dependency-first order,
-// `entry_file` last. USEd modules that no database entry defines are left
-// for semantics to resolve (intrinsic modules and external-library .mod
-// files found via the recorded search directories; anything genuinely
+// Parse entries lazily outward from the `root_files` (absolute paths that
+// must be in `entries`) and return the union of their USE closures in
+// dependency-first order. USEd modules that no database entry defines are
+// left for semantics to resolve (intrinsic modules and external-library
+// .mod files found via the recorded search directories; anything genuinely
 // missing gets flang's regular error). Throws std::runtime_error on
-// unparseable files or a USE cycle.
+// unparseable files, a root missing from the database, or a USE cycle.
 std::vector<parsed_file_t>
-closure_of(std::string const &entry_file,
+closure_of(std::vector<std::string> const &root_files,
            std::vector<compdb::entry_t> const &entries,
            Fortran::parser::AllCookedSources &all_cooked,
            options_factory_t const &options_for);
