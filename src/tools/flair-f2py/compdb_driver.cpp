@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <memory>
 #include <stdexcept>
@@ -13,6 +14,7 @@
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/DiagnosticOptions.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -45,8 +47,43 @@ static void configure_invocation(Fortran::frontend::CompilerInvocation &invoc,
   invoc.getFortranOpts().compilerDirectiveSentinels.push_back(FLAIR_DIRECTIVE);
 }
 
+// A package name must be a valid Python identifier (it names the extension
+// and its PyInit symbol): fold every other character to '_'.
+static std::string sanitize_identifier(std::string name) {
+  for (char &c : name)
+    if (not(std::isalnum(static_cast<unsigned char>(c)) || c == '_'))
+      c = '_';
+  if (name.empty() || std::isdigit(static_cast<unsigned char>(name[0])))
+    name.insert(name.begin(), '_');
+  return name;
+}
+
+// Default package name: the entry's file stem, with the same trailing-_mod
+// strip the wrapper names get (module_pyname).
+static std::string default_pkg_name(std::string const &entry_abs) {
+  llvm::StringRef stem = llvm::sys::path::stem(entry_abs);
+  if (stem.size() > 4 && stem.ends_with("_mod"))
+    stem = stem.drop_back(4);
+  return stem.str();
+}
+
+// The runtime source ships in <prefix>/share/flair next to <prefix>/bin; a
+// build-tree binary has no share layout, so fall back to the bare filename
+// (the generated script's FLAIR_RUNTIME env override covers that case).
+static std::string locate_runtime_src(const char *argv0) {
+  std::string const exe =
+      llvm::sys::fs::getMainExecutable(argv0, (void *)&locate_runtime_src);
+  llvm::SmallString<256> path(llvm::sys::path::parent_path(exe));
+  llvm::sys::path::append(path, "..", "share", "flair",
+                          "fortran_python_api.F90");
+  llvm::sys::path::remove_dots(path, /*remove_dot_dot=*/true);
+  if (llvm::sys::fs::exists(path))
+    return std::string(path);
+  return "fortran_python_api.F90";
+}
+
 int run_compdb_mode(std::string const &compdb_path,
-                    std::string const &entry_file,
+                    std::string const &entry_file, std::string pkg_name,
                     std::vector<std::string> wrap_files,
                     llvm::ArrayRef<const char *> passthrough_args,
                     const char *argv0) {
@@ -127,6 +164,25 @@ int run_compdb_mode(std::string const &compdb_path,
 
   auto wdata = std::make_shared<wdata_t>();
   wdata->collector = std::make_unique<directive_collector>(SemanticsCtx);
+
+  // Combined-package output: name, runtime location, and per-module search
+  // dirs (each wrapper is compiled with the -I/-J/-module-dir flags of the
+  // entry defining its module, so the project's .mod files are found).
+  pkg_info_t pkg;
+  pkg.name = sanitize_identifier(pkg_name.empty() ? default_pkg_name(entry_abs)
+                                                  : std::move(pkg_name));
+  pkg.runtime_src = locate_runtime_src(argv0);
+  for (auto const &pf : files) {
+    std::vector<std::string> dirs;
+    auto const &eargs = pf.entry->args;
+    for (size_t i = 0; i + 1 < eargs.size(); ++i)
+      if (eargs[i] == "-I" || eargs[i] == "-J" || eargs[i] == "-module-dir")
+        if (std::find(dirs.begin(), dirs.end(), eargs[i + 1]) == dirs.end())
+          dirs.push_back(eargs[i + 1]);
+    for (auto const &name : pf.defined)
+      pkg.module_search_dirs[name] = dirs;
+  }
+  wdata->pkg = std::move(pkg);
 
   for (auto &pf : files) {
     parse::Program &tree =

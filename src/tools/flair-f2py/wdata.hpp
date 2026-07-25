@@ -1,4 +1,8 @@
 #pragma once
+#include <map>
+#include <optional>
+#include <vector>
+
 #include "flang/Semantics/symbol.h"
 
 #include "directive_collector.hpp"
@@ -59,12 +63,25 @@ struct module_info_t {
   module_info_t(str_t const &name) : name(name) {}
 };
 
+// Combined-package output (compdb mode): all wrapped modules become
+// submodules of one extension named `name`, built by a generated script.
+struct pkg_info_t {
+  str_t name;        // sanitized package name
+  str_t runtime_src; // path to fortran_python_api.F90 for the build script
+  // folded module name -> module-search dirs (-I/-J/-module-dir values) of
+  // its defining database entry, for compiling that module's wrapper
+  std::map<str_t, std::vector<str_t>> module_search_dirs;
+};
+
 struct wdata_t {
   std::vector<module_info_t> modules;
   std::unique_ptr<directive_collector> collector;
 
   // Source files whose modules get wrapped (--wrap). Empty: wrap all inputs.
   std::vector<str_t> wrap_files;
+
+  // Engaged only in compdb mode: combined-package codegen.
+  std::optional<pkg_info_t> pkg;
 
   explicit wdata_t() = default;
 };

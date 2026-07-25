@@ -162,12 +162,16 @@ class CaseBuilder:
 
     def flair_compdb(self, compdb: str, entry: str,
                      wrap: list[str] | None = None,
+                     pkg: str | None = None,
                      expect_error: bool = False) -> subprocess.CompletedProcess:
         """flair-f2py in compilation-database mode: the USE closure of
         `entry` is discovered from compile_commands.json, each file parsed
         with its own recorded flags, and the closure's modules wrapped
-        (restricted by --wrap when given)."""
+        (restricted by --wrap when given) into one combined package
+        extension named --pkg (default: the entry's stem)."""
         cmd = [self.flair_bin, "--compdb", compdb, "--entry", entry]
+        if pkg is not None:
+            cmd += ["--pkg", pkg]
         if self.intrinsic_mod_dir is not None:
             cmd += ["-fintrinsic-modules-path", self.intrinsic_mod_dir]
         for w in wrap or []:
@@ -236,6 +240,41 @@ class CaseBuilder:
              *extra_sos, "-o", f"{mod}.so", "-Wl,-rpath,$ORIGIN"]
         )
         self._extensions.append(f"{mod}.so")
+
+    def package_extension(self, pkg: str, submods: list[str], lib: str) -> None:
+        """Compile the wrappers + package init of a compdb run and link the
+        single combined <pkg>.so."""
+        for mod in [*submods, f"{pkg}_pkg"]:
+            self._run(
+                [self.flang, "-fPIC", "-I", self.runtime_dir, "-c", f"py_{mod}.F90"]
+            )
+        objs = [f"py_{mod}.o" for mod in [*submods, f"{pkg}_pkg"]]
+        self._run(
+            [self.flang, "-fPIC", "-shared",
+             self.runtime_dir / "fortran_python_api.o", *objs, f"lib{lib}.so",
+             "-o", f"{pkg}.so", "-Wl,-rpath,$ORIGIN"]
+        )
+        self._extensions.append(f"{pkg}.so")
+
+    def run_build_script(self, pkg: str, proj_libs: list[str]) -> None:
+        """Run the generated build_<pkg>.sh as shipped, supplying only the
+        toolchain and link inputs it documents."""
+        env = dict(
+            os.environ,
+            FC=str(self.flang),
+            FLAIR_RUNTIME=str(RUNTIME_SRC),
+            PROJ_LIBS=" ".join(proj_libs),
+        )
+        proc = subprocess.run(
+            ["sh", f"build_{pkg}.sh"],
+            cwd=self.tmp,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        if proc.returncode != 0:
+            pytest.fail(f"build_{pkg}.sh failed:\n{_fmt(proc)}")
+        self._extensions.append(f"{pkg}.so")
 
     def build(self, sources: list[str], wrap: list[str] | None = None,
               lib: str = "case") -> "CaseBuilder":

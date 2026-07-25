@@ -24,10 +24,13 @@ int main(int argc, const char **argv) try {
   // (its option table rejects unknown flags). `--wrap <file>` (repeatable)
   // restricts wrapping to the modules defined in the given input files; the
   // remaining inputs are resolved for their symbols only. `--compdb <path>`
-  // together with `--entry <file>` switches to compilation-database mode.
+  // together with `--entry <file>` switches to compilation-database mode,
+  // which emits one combined package extension; `--pkg <name>` overrides the
+  // package name (default: derived from the entry's file stem).
   std::vector<std::string> wrap_files;
   std::string compdb_path;
   std::string entry_file;
+  std::string pkg_name;
   llvm::SmallVector<const char *, 256> args;
   args.push_back(argv[0]);
   for (int i = 1; i < argc; ++i) {
@@ -43,6 +46,8 @@ int main(int argc, const char **argv) try {
       compdb_path = option_value(arg);
     else if (arg == "--entry")
       entry_file = option_value(arg);
+    else if (arg == "--pkg")
+      pkg_name = option_value(arg);
     else
       args.push_back(argv[i]);
   }
@@ -54,9 +59,12 @@ int main(int argc, const char **argv) try {
   if (!compdb_path.empty() || !entry_file.empty()) {
     if (compdb_path.empty() || entry_file.empty())
       throw std::runtime_error("--compdb and --entry must be used together.");
-    return run_compdb_mode(compdb_path, entry_file, std::move(wrap_files),
-                           llvm::ArrayRef(args).slice(1), args[0]);
+    return run_compdb_mode(compdb_path, entry_file, std::move(pkg_name),
+                           std::move(wrap_files), llvm::ArrayRef(args).slice(1),
+                           args[0]);
   }
+  if (!pkg_name.empty())
+    throw std::runtime_error("--pkg requires --compdb mode.");
 
   // ------- main tool
 

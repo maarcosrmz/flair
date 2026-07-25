@@ -318,6 +318,15 @@ module python_api_mod
             type(c_ptr) :: r
         end function
 
+        function PyDict_SetItemString(dp, key, item) &
+                bind(C, name="PyDict_SetItemString") result(r)
+            import :: c_ptr, c_int
+            type(c_ptr), value :: dp
+            type(c_ptr), value :: key   ! null-terminated ASCII C string
+            type(c_ptr), value :: item  ! does not steal: increfs on success
+            integer(c_int) :: r         ! 0 on success, -1 on error
+        end function
+
         function PyDict_Size(dp) bind(C, name="PyDict_Size") result(r)
             import :: c_ptr, c_ptrdiff_t
             type(c_ptr), value :: dp
@@ -464,6 +473,11 @@ module python_api_mod
             import :: c_ptr
             type(c_ptr), value :: name
             type(c_ptr) :: r
+        end function
+
+        function PyImport_GetModuleDict() bind(C, name="PyImport_GetModuleDict") result(r)
+            import :: c_ptr
+            type(c_ptr) :: r   ! borrowed reference to sys.modules
         end function
 
         function PyObject_GetAttrString(obj, name) bind(C, name="PyObject_GetAttrString") result(r)

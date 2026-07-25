@@ -44,7 +44,7 @@ bool has_wrappable(module_info_t const &m) {
          !m.variables.empty();
 }
 
-str_t codegen_module(module_info_t const &m_in) {
+str_t codegen_module(module_info_t const &m_in, bool internal_init) {
   str_t const modpy = module_pyname(m_in.name);
   string_pool_t strings;
   std::unordered_set<sym_ptr_t>
@@ -237,10 +237,15 @@ str_t codegen_module(module_info_t const &m_in) {
   pyinit_fills += fmt::format("        {0}%m_free     = c_null_ptr\n", md);
 
   // ---- assemble PyInit -----------------------------------------------------
+  // Combined-package builds export the init as FLAIR_init_<modpy>: the single
+  // .so may expose only one PyInit (the package's), which calls these.
   str_t pyinit;
-  pyinit += fmt::format(
-      "    function PyInit_{0}() bind(C, name=\"PyInit_{0}\") result(r)\n",
-      modpy);
+  pyinit += internal_init ? fmt::format("    function flair_init_{0}() bind(C, "
+                                        "name=\"FLAIR_init_{0}\") result(r)\n",
+                                        modpy)
+                          : fmt::format("    function PyInit_{0}() bind(C, "
+                                        "name=\"PyInit_{0}\") result(r)\n",
+                                        modpy);
   pyinit += "        type(c_ptr) :: r\n";
   pyinit += "        type(c_ptr) :: mod_ptr, type_ptr\n";
   pyinit += "        integer(c_int) :: rc\n";
