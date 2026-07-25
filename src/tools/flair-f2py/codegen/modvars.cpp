@@ -254,7 +254,11 @@ str_t gen_module_vars(module_info_t const &m, string_pool_t &strings,
   if (!getattr_cases.empty()) {
     procedures += "    ! ===== module __getattr__: live intrinsic-scalar "
                   "module variables (PEP 562) =====\n";
-    procedures += "    function py_mod_getattr(self, obj) bind(C) result(r)\n";
+    // name="" suppresses the binding label: the function is only reached via
+    // c_funloc, and a global `py_mod_getattr` symbol would collide when
+    // several wrappers are linked into one combined package extension.
+    procedures += "    function py_mod_getattr(self, obj) bind(C, name=\"\") "
+                  "result(r)\n";
     procedures += "        type(c_ptr), value :: self, obj\n";
     procedures += "        type(c_ptr) :: r\n";
     procedures += "        type(c_ptr) :: cs\n";
