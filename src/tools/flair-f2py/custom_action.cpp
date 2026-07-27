@@ -1,12 +1,19 @@
+#include <cstdlib>
+#include <memory>
 #include <optional>
+#include <stdexcept>
 #include <utility>
 
 #include "flang/Frontend/CompilerInstance.h"
+#include "flang/Frontend/TextDiagnosticBuffer.h"
+#include "flang/Parser/options.h"
 #include "flang/Parser/parse-tree-visitor.h"
 #include "flang/Parser/parse-tree.h"
 #include "flang/Parser/parsing.h"
 #include "flang/Semantics/semantics.h"
 #include "flang/Support/Fortran-features.h"
+#include "clang/Basic/Diagnostic.h"
+#include "clang/Basic/DiagnosticOptions.h"
 
 #include "custom_action.hpp"
 #include "directive_collector.hpp"
@@ -84,4 +91,50 @@ void custom_action::executeAction() {
                               getInstance().getSemaOutputStream()))
       failed_ = true;
   }
+}
+
+int run_single_mode(llvm::ArrayRef<const char *> args,
+                    std::vector<std::string> wrap_files, const char *argv0) {
+  auto flang = std::make_unique<Fortran::frontend::CompilerInstance>();
+
+  flang->createDiagnostics();
+  if (not flang->hasDiagnostics())
+    return EXIT_FAILURE;
+
+  auto diags_buffer =
+      std::make_unique<Fortran::frontend::TextDiagnosticBuffer>();
+
+  clang::DiagnosticOptions diag_opts;
+  clang::DiagnosticsEngine diags(clang::DiagnosticIDs::create(), diag_opts,
+                                 diags_buffer.get(), /*ShouldOwnClient=*/false);
+
+  if (not Fortran::frontend::CompilerInvocation::createFromArgs(
+          flang->getInvocation(), args, diags, argv0))
+    throw std::runtime_error("Failed creating compiler invocation.");
+
+  // -fintrinsic-modules-path lands in the preprocessor options; the semantics
+  // context reads intrinsic modules from the Fortran options, so mirror it
+  // there. The distro path is a last resort for an unconfigured invocation.
+  {
+    auto &pp_opts = flang->getInvocation().getPreprocessorOpts();
+    auto &fortran_opts = flang->getInvocation().getFortranOpts();
+    for (auto const &dir : pp_opts.searchDirectoriesFromIntrModPath)
+      fortran_opts.intrinsicModuleDirectories.emplace_back(dir);
+    fortran_opts.intrinsicModuleDirectories.emplace_back("/usr/include/flang");
+  }
+
+  diags_buffer->flushDiagnostics(flang->getDiagnostics());
+
+  flang->getInvocation().getFortranOpts().compilerDirectiveSentinels.push_back(
+      FLAIR_DIRECTIVE);
+
+  auto action = std::make_unique<custom_action>();
+  action->set_wrap_files(std::move(wrap_files));
+  bool const success = flang->executeAction(*action);
+  flang->clearOutputFiles(/*EraseFiles=*/true);
+
+  if (not success)
+    throw std::runtime_error("Failed to run custom_action.");
+
+  return action->failed() ? EXIT_FAILURE : EXIT_SUCCESS;
 }

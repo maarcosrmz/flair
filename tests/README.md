@@ -75,6 +75,7 @@ location) to `flair-f2py`, since the tool does not locate flang's intrinsic
 
 | Test | Feature |
 |---|---|
+| `test_cli` | command-line surface: `--help` / `--version`, `-v` off by default, rejected flag combinations |
 | `test_derived_types` | derived-type fields (incl. rank-1 allocatable as NumPy property), the three ctor styles (default new, generic interface, `<type>_init`), keyword-only `__init__`, view/deep-copy semantics, keep-alive |
 | `test_cross_module` | foreign derived-type fields and args across extension modules, use-associated `FLAIR_*` converters, "not initialized" guard, cross-module generic dispatch, transitive converter-producer closure of the wrap set |
 | `test_compdb` | compilation-database mode: USE-closure discovery from `--entry`, per-entry compile flags, the combined package extension and its generated build script, `--wrap` composition (explicit files, the `@entry` token, files outside the closure, promoted converter producers) |

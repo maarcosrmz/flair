@@ -1,6 +1,10 @@
 #pragma once
 
+#include <string>
+#include <vector>
+
 #include "flang/Frontend/FrontendActions.h"
+#include "llvm/ADT/ArrayRef.h"
 
 #include "wdata.hpp"
 
@@ -35,3 +39,12 @@ public:
 private:
   bool initSemantics();
 };
+
+// Single-invocation mode: run custom_action over the inputs named in `args`
+// (which are also the flang flags, passed through untouched), wrapping the
+// modules of the `wrap_files` set -- or every input module when it is empty.
+// Inputs must be given in dependency order, since USE statements resolve
+// against the modules earlier inputs contributed to the shared scope rather
+// than against .mod files. Returns a process exit code.
+int run_single_mode(llvm::ArrayRef<const char *> args,
+                    std::vector<std::string> wrap_files, const char *argv0);

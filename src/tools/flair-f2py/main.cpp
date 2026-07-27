@@ -1,44 +1,85 @@
 #include <cstdlib>
-#include <iostream>
-#include <memory>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <vector>
 
-#include "flang/Frontend/CompilerInstance.h"
-#include "flang/Frontend/FrontendAction.h"
-#include "flang/Frontend/TextDiagnosticBuffer.h"
-#include "flang/Parser/options.h"
-#include "clang/Basic/Diagnostic.h"
-#include "clang/Basic/DiagnosticOptions.h"
+#include "flang/Support/Version.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/TargetSelect.h"
+#include "llvm/Support/raw_ostream.h"
 
 #include "compdb_driver.hpp"
 #include "custom_action.hpp"
+#include "flu/logger.hpp"
 
-//====================   main    ==========================================
+// ==========  Options of the program ======================================
 
-int main(int argc, const char **argv) try {
+static constexpr char usage[] = R"HELPDOC(
+  flair-f2py generates Python bindings for Fortran.
 
-  // Extract flair-specific options before Flang parses the command line
-  // (its option table rejects unknown flags). `--wrap <file>` (repeatable)
-  // composes the wrap set from its arguments: the modules defined in the
-  // given input files are wrapped, the remaining inputs are resolved for
-  // their symbols only. The set is then closed over its converter producers
-  // -- modules defining a derived type that crosses a wrapped module's API --
-  // since the consumer's wrapper use-associates their converters. Without any
-  // `--wrap`, every input is wrapped. The token `--wrap @entry` stands for the
-  // entry's own modules plus the modules it USEs directly (compdb mode only).
-  // `--compdb <path>` together
-  // with `--entry <file>` switches to compilation-database mode, which emits
-  // one combined package extension; `--pkg <name>` overrides the package
-  // name (default: derived from the entry's file stem).
-  std::vector<std::string> wrap_files;
-  std::string compdb_path;
-  std::string entry_file;
-  std::string pkg_name;
-  llvm::SmallVector<const char *, 256> args;
-  args.push_back(argv[0]);
+  Usage:
+   flair-f2py mod.F90 [flang options]             Wrap every module of every input
+   flair-f2py a.F90 b.F90 --wrap a.F90            Wrap a.F90; b.F90 only resolves symbols
+   flair-f2py --compdb DIR --entry main.F90       Wrap main.F90's USE closure, from
+                                                  DIR/compile_commands.json
+
+  Inputs must be given in dependency order: USE statements resolve against the
+  modules earlier inputs contribute to one shared scope, not against .mod files.
+  Unrecognized options are passed through to flang, so its flags can be mixed in
+  (notably -fintrinsic-modules-path DIR, which flair-f2py does not infer).
+
+  Wrap set:
+   --wrap FILE                                    Wrap the modules FILE defines (repeatable).
+                                                  Without any --wrap, every input is wrapped.
+                                                  The set is then closed over its converter
+                                                  producers: modules defining a derived type
+                                                  that crosses a wrapped module's API, whose
+                                                  converters the consumer use-associates.
+   --wrap @entry                                  Stands for the entry's own modules plus the
+                                                  modules it USEs directly (--compdb only).
+
+  Compilation-database mode:
+   --compdb DIR                                   Discover the entry's USE closure from
+                                                  DIR/compile_commands.json and parse each
+                                                  file with its own recorded flags. Emits one
+                                                  combined package extension plus the script
+                                                  that builds it.
+   --entry FILE                                   Root of the closure. Required with --compdb.
+   --pkg NAME                                     Package name (default: the entry's stem).
+
+  Other options:
+   -v, --verbose                                  Verbose output (also FLAIR_VERBOSE=N)
+   -h, --help                                     Show this help
+   --version                                      Show version information
+)HELPDOC";
+
+static void print_version(llvm::raw_ostream &os) {
+  os << "flair-f2py version " << FLAIR_VERSION << " (git hash " << GIT_HASH
+     << ")\n";
+  os << "  Based on " << Fortran::common::getFlangToolFullVersion("flang")
+     << "\n";
+  os.flush();
+}
+
+// flair's own options, extracted before flang parses the command line: flang's
+// option table rejects unknown flags, so they cannot simply be left in place.
+// Everything not listed here is passed through to flang untouched -- which is
+// also why llvm::cl is not used: flang flags take separate-word values, and a
+// cl positional list would swallow those values as input files.
+struct options_t {
+  std::vector<std::string> wrap_files; // --wrap FILE (repeatable), @entry token
+  std::string compdb_path;             // --compdb DIR
+  std::string entry_file;              // --entry FILE
+  std::string pkg_name;                // --pkg NAME
+  llvm::SmallVector<const char *, 256> passthrough; // flang's own arguments
+  bool help = false;                                // -h / --help
+  bool version = false;                             // --version
+};
+
+static options_t parse_options(int argc, const char **argv) {
+  options_t opts;
+  int verbose = 0;
   for (int i = 1; i < argc; ++i) {
     std::string_view const arg(argv[i]);
     auto const option_value = [&](std::string_view opt) {
@@ -47,82 +88,84 @@ int main(int argc, const char **argv) try {
       return argv[++i];
     };
     if (arg == "--wrap")
-      wrap_files.emplace_back(option_value(arg));
+      opts.wrap_files.emplace_back(option_value(arg));
     else if (arg == "--compdb")
-      compdb_path = option_value(arg);
+      opts.compdb_path = option_value(arg);
     else if (arg == "--entry")
-      entry_file = option_value(arg);
+      opts.entry_file = option_value(arg);
     else if (arg == "--pkg")
-      pkg_name = option_value(arg);
+      opts.pkg_name = option_value(arg);
+    else if (arg == "-h" || arg == "--help")
+      opts.help = true;
+    else if (arg == "--version")
+      opts.version = true;
+    // Swallowed rather than passed on: flang's -v reports driver command
+    // lines, and flair-f2py never spawns a driver.
+    else if (arg == "-v" || arg == "--verbose")
+      ++verbose;
     else
-      args.push_back(argv[i]);
+      opts.passthrough.push_back(argv[i]);
   }
+  if (verbose > 0)
+    flu::logger::set_verbose(verbose);
+  return opts;
+}
+
+// Rejects flag combinations that have no meaning, so they fail before any
+// input is parsed rather than half-way through a run.
+static void validate_options(options_t const &opts) {
+  if (not opts.compdb_path.empty() || not opts.entry_file.empty()) {
+    if (opts.compdb_path.empty() || opts.entry_file.empty())
+      throw std::runtime_error("--compdb and --entry must be used together.");
+    return;
+  }
+  if (not opts.pkg_name.empty())
+    throw std::runtime_error("--pkg requires --compdb mode.");
+  for (auto const &w : opts.wrap_files)
+    if (w == WRAP_ENTRY_TOKEN)
+      throw std::runtime_error("--wrap " + std::string(WRAP_ENTRY_TOKEN) +
+                               " requires --compdb mode.");
+}
+
+//====================   main    ==========================================
+
+int main(int argc, const char **argv) try {
+
+  // Only a progress reporter: every failure below throws and is reported by
+  // the handler at the bottom, so that mode functions and main share one path.
+  flu::logger const report = flu::logger::report();
+
+  // ----- Parse the options in the command line
+  options_t opts = parse_options(argc, argv);
+
+  if (opts.help) {
+    llvm::outs() << usage;
+    return EXIT_SUCCESS;
+  }
+  if (opts.version) {
+    print_version(llvm::outs());
+    return EXIT_SUCCESS;
+  }
+
+  validate_options(opts);
+  report("Based on {}", Fortran::common::getFlangToolFullVersion("flang"));
 
   llvm::InitializeAllTargets();
   llvm::InitializeAllTargetMCs();
   llvm::InitializeAllAsmPrinters();
 
-  if (!compdb_path.empty() || !entry_file.empty()) {
-    if (compdb_path.empty() || entry_file.empty())
-      throw std::runtime_error("--compdb and --entry must be used together.");
-    return run_compdb_mode(compdb_path, entry_file, std::move(pkg_name),
-                           std::move(wrap_files), llvm::ArrayRef(args).slice(1),
-                           args[0]);
+  // ------- compilation-database mode
+  if (not opts.compdb_path.empty()) {
+    report("Compilation-database mode: entry {}", opts.entry_file);
+    return run_compdb_mode(opts.compdb_path, opts.entry_file,
+                           std::move(opts.pkg_name), std::move(opts.wrap_files),
+                           llvm::ArrayRef(opts.passthrough), argv[0]);
   }
-  if (!pkg_name.empty())
-    throw std::runtime_error("--pkg requires --compdb mode.");
-  for (auto const &w : wrap_files)
-    if (w == WRAP_ENTRY_TOKEN)
-      throw std::runtime_error("--wrap " + std::string(WRAP_ENTRY_TOKEN) +
-                               " requires --compdb mode.");
 
   // ------- main tool
-
-  std::unique_ptr<Fortran::frontend::CompilerInstance> flang =
-      std::make_unique<Fortran::frontend::CompilerInstance>();
-
-  flang->createDiagnostics();
-  if (!flang->hasDiagnostics())
-    return 1;
-
-  auto diagsBuffer =
-      std::make_unique<Fortran::frontend::TextDiagnosticBuffer>();
-
-  clang::DiagnosticOptions diagOpts;
-  clang::DiagnosticsEngine diags(clang::DiagnosticIDs::create(), diagOpts,
-                                 diagsBuffer.get(), /*ShouldOwnClient=*/false);
-
-  bool success = Fortran::frontend::CompilerInvocation::createFromArgs(
-      flang->getInvocation(), llvm::ArrayRef(args).slice(1), diags, args[0]);
-  if (!success)
-    throw std::runtime_error("Failed creating compiler invocation.");
-
-  {
-    auto &ppOpts = flang->getInvocation().getPreprocessorOpts();
-    auto &fortranOpts = flang->getInvocation().getFortranOpts();
-    for (auto const &dir : ppOpts.searchDirectoriesFromIntrModPath)
-      fortranOpts.intrinsicModuleDirectories.emplace_back(dir);
-    llvm::SmallString<128> defaultIntrDir("/usr/include/flang");
-    fortranOpts.intrinsicModuleDirectories.emplace_back(
-        std::string(defaultIntrDir));
-  }
-
-  diagsBuffer->flushDiagnostics(flang->getDiagnostics());
-
-  Fortran::parser::Options &fortran_opts =
-      flang->getInvocation().getFortranOpts();
-  fortran_opts.compilerDirectiveSentinels.push_back(FLAIR_DIRECTIVE);
-
-  auto act = std::make_unique<custom_action>();
-  act->set_wrap_files(std::move(wrap_files));
-  success = flang->executeAction(*act);
-  flang->clearOutputFiles(true);
-
-  if (not success)
-    throw std::runtime_error("Failed to run custom_action.");
-
-  return act->failed() ? EXIT_FAILURE : EXIT_SUCCESS;
+  return run_single_mode(llvm::ArrayRef(opts.passthrough),
+                         std::move(opts.wrap_files), argv[0]);
 } catch (const std::exception &error) {
-  std::cerr << error.what() << '\n';
+  flu::logger::error()(error.what());
   return EXIT_FAILURE;
 }
