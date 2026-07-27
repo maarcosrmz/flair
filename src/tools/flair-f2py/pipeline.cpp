@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -19,7 +20,9 @@ using namespace codegen;
 
 // The compilation database records compile steps only, so the link inputs
 // (the project's objects or libraries) cannot be derived and stay a
-// user-filled variable.
+// user-filled variable. Wrappers are compiled dependency-first (submods
+// arrives in that order): consumer wrappers use-associate the producer
+// wrappers' converters, and `-I .` makes the sibling .mod files visible.
 static std::string build_script(pkg_info_t const &pkg,
                                 std::vector<std::string> const &submods,
                                 std::vector<std::string> const &folded_names) {
@@ -114,6 +117,21 @@ package_outputs(wdata_t &wdata, llvm::raw_ostream &out,
 bool run_wrap_pipeline(sema::SemanticsContext &context,
                        std::shared_ptr<wdata_t> wdata, llvm::raw_ostream &out) {
   traverse_global_scope(context.globalScope(), wdata, context);
+
+  // Order wrapper modules dependency-first (depgraph post-order): a consumer
+  // wrapper use-associates the producer wrapper's converters, so the producer
+  // must be emitted, compiled, and init'ed before its consumers.
+  if (wdata->pkg && not wdata->pkg->module_order.empty()) {
+    auto const &order = wdata->pkg->module_order;
+    auto const rank = [&](module_info_t const &mi) {
+      return static_cast<size_t>(
+          std::find(order.begin(), order.end(), fold_lower(mi.name)) -
+          order.begin());
+    };
+    std::stable_sort(
+        wdata->modules.begin(), wdata->modules.end(),
+        [&](auto const &a, auto const &b) { return rank(a) < rank(b); });
+  }
 
   note_run_modules(wdata->modules);
   std::vector<std::pair<std::string, std::string>> outputs;

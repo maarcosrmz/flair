@@ -76,7 +76,7 @@ bool note_ext_type(ext_types_t &ext_types, semantics::Symbol const &tsym) {
   str_t const n = tname(tsym);
   if (view_pyobject_fn(n).size() > 63) {
     flu::emit_error(tsym, "flair-f2py: derived type name '" + n +
-                              "' is too long for the external converter names "
+                              "' is too long for the generated converter names "
                               "(63-char identifier limit); annotate '" +
                               n +
                               "' with a '!flair$ ignore' directive to skip it");
@@ -85,8 +85,8 @@ bool note_ext_type(ext_types_t &ext_types, semantics::Symbol const &tsym) {
   auto const [it, inserted] = ext_types.emplace(n, &tsym);
   if (!inserted) {
     if (it->second != &tsym) {
-      // Same folded name, different type: the name-keyed FLAIR_* linker
-      // symbols of the two producers would collide.
+      // Same folded name, different type: the consumer would use-associate
+      // identically named FLAIR_* converters from both producer wrappers.
       flu::emit_error(
           tsym, "flair-f2py: derived type '" + n +
                     "' collides with an equally named type from "
@@ -117,8 +117,8 @@ bool note_ext_type(ext_types_t &ext_types, semantics::Symbol const &tsym) {
   flu::emit_warning(tsym, "flair-f2py: derived type '" + n +
                               "' is defined in module '" +
                               flu::owning_module_name(tsym) +
-                              "'; its wrapper must be generated separately and "
-                              "linked with this one");
+                              "'; its wrapper must be generated separately, "
+                              "compiled before this one, and linked with it");
   return true;
 }
 

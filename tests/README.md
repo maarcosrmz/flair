@@ -23,9 +23,12 @@ must fail one test instead of killing the whole pytest session.
   binary location is therefore `../flair.build/src/tools/flair-f2py`.
 - LLVM **flang** from the *same toolchain* that flair targets (LLVM >= 23).
   This matters beyond compiler compatibility: the cross-module
-  `FLAIR_<type>_from_PyObject` converters are plain (non-`bind(C)`) Fortran
-  symbols, so all wrappers, wrapped sources, and the runtime must be compiled
-  with the same flang so name mangling matches.
+  `FLAIR_<type>_from_PyObject` converters are module procedures of the
+  producer's wrapper module, so consumer wrappers need its `.mod` file at
+  compile time (same module-file format) and its mangled `_QM...` symbols at
+  link time — all wrappers, wrapped sources, and the runtime must be compiled
+  with the same flang, and separately generated wrappers must be compiled in
+  dependency order.
 - Python with `pytest` and `numpy` (e.g. `python -m venv .venv &&
   .venv/bin/pip install pytest numpy`).
 
@@ -73,7 +76,7 @@ location) to `flair-f2py`, since the tool does not locate flang's intrinsic
 | Test | Feature |
 |---|---|
 | `test_derived_types` | derived-type fields (incl. rank-1 allocatable as NumPy property), the three ctor styles (default new, generic interface, `<type>_init`), keyword-only `__init__`, view/deep-copy semantics, keep-alive |
-| `test_cross_module` | foreign derived-type fields and args across extension modules, external `FLAIR_*` converters, "not initialized" guard, cross-module generic dispatch |
+| `test_cross_module` | foreign derived-type fields and args across extension modules, use-associated `FLAIR_*` converters, "not initialized" guard, cross-module generic dispatch |
 | `test_interfaces` | generic-interface wrapping: dispatch on scalar category / derived type / array dtype+rank, kind-only overload collapse, single-specific forward, TypeError fallback |
 | `test_arrays` | NumPy array args: intent in/inout/out, rank 1/2, dtype mapping, writeback-if-copy |
 | `test_scalars` | numeric kinds, None returns, `METH_NOARGS` |

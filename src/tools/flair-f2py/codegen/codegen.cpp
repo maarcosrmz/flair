@@ -264,38 +264,29 @@ str_t codegen_module(module_info_t const &m_in, bool internal_init) {
   pyinit += "        r = mod_ptr\n";
   pyinit += "    end function\n";
 
-  // ---- imports + converter interfaces for types wrapped in other files -----
-  // The only-import makes the foreign type name available for the interface
-  // blocks and wrapper locals regardless of the wrapped module's default
-  // accessibility. The converter bodies live in the file that wraps the
-  // defining module; the consumer .so must link against that producer (never
-  // duplicate its objects: each copy has its own type state, and the
-  // converters' not-initialized guard would then fire forever).
-  str_t imports, interfaces;
+  // ---- imports for types wrapped in other files ----------------------------
+  // The only-import of the wrapped module makes the foreign type name
+  // available for wrapper locals regardless of that module's default
+  // accessibility. The converters are module procedures of the producer's
+  // wrapper module, so this wrapper needs the producer wrapper's .mod at
+  // compile time and its object at link time (never duplicate its objects:
+  // each copy has its own type state, and the converters' not-initialized
+  // guard would then fire forever).
+  str_t imports;
   for (auto const &[n, tsym] : ext_types) {
-    imports += fmt::format("    use {}, only: {}\n",
-                           fold_lower(flu::owning_module_name(*tsym)), n);
-    interfaces += "    interface\n";
-    interfaces +=
-        fmt::format("        function {}(p) result(r)\n", from_pyobject_fn(n));
-    interfaces += "            import\n";
-    interfaces += "            type(c_ptr), value :: p\n";
-    interfaces += fmt::format("            type({}), pointer :: r\n", n);
-    interfaces += "        end function\n";
-    interfaces += fmt::format("        function {}(data, owner) result(r)\n",
-                              view_pyobject_fn(n));
-    interfaces += "            import\n";
-    interfaces += "            type(c_ptr), value :: data, owner\n";
-    interfaces += "            type(c_ptr) :: r\n";
-    interfaces += "        end function\n";
-    interfaces += "    end interface\n";
+    str_t const owner = fold_lower(flu::owning_module_name(*tsym));
+    imports += fmt::format("    use {}, only: {}\n", owner, n);
+    imports += fmt::format("    use py_{}_mod, only: {}, {}\n",
+                           module_pyname(owner), from_pyobject_fn(n),
+                           view_pyobject_fn(n));
   }
 
-  // ---- external converter definitions for this module's wrapped types ------
+  // ---- converter definitions for this module's wrapped types ---------------
   // from: isinstance-checked unwrap; sets the exception and returns a
   //       disassociated pointer on failure.
   // view: wraps a component address + owning PyObject into a new view instance
   //       (numpy 'base' pattern; takes a reference on the owner).
+  // Module procedures, use-associated by the wrappers of consuming modules.
   // Both guard against the module not being initialized yet (its PyInit sets
   // py_<t>_type_obj): the consumer module must be imported after this one.
   str_t converters;
@@ -311,61 +302,60 @@ str_t codegen_module(module_info_t const &m_in, bool internal_init) {
       str_t const tn = tname(tsym);
       str_t const s_type =
           strings.intern("expected a " + clsname(tsym) + " instance");
-      str_t const guard = fmt::format("    if (.not. c_associated(py_{}_type_"
-                                      "obj)) then\n        call PyErr_SetString"
-                                      "(PyExc_RuntimeError, c_loc({}))\n       "
-                                      " return\n    end if\n",
-                                      tn, s_noinit);
+      str_t const guard =
+          fmt::format("        if (.not. c_associated(py_{}_type_obj)) then\n"
+                      "            call PyErr_SetString(PyExc_RuntimeError, "
+                      "c_loc({}))\n            return\n        end if\n",
+                      tn, s_noinit);
 
       converters +=
-          fmt::format("function {}(p) result(r)\n", from_pyobject_fn(tn));
-      converters += fmt::format("    use py_{}_mod\n", modpy);
-      converters += "    use iso_c_binding\n";
-      converters += "    implicit none\n";
-      converters += "    type(c_ptr), value :: p\n";
-      converters += fmt::format("    type({}), pointer :: r\n", tn);
+          fmt::format("    function {}(p) result(r)\n", from_pyobject_fn(tn));
+      converters += "        type(c_ptr), value :: p\n";
+      converters += fmt::format("        type({}), pointer :: r\n", tn);
       converters +=
-          fmt::format("    type({}), pointer :: obj\n", struct_name(tsym));
-      converters += "    r => null()\n";
+          fmt::format("        type({}), pointer :: obj\n", struct_name(tsym));
+      converters += "        r => null()\n";
       converters += guard;
-      converters +=
-          fmt::format("    if (PyObject_IsInstance(p, py_{}_type_obj) /= 1) "
-                      "then\n",
-                      tn);
-      converters += "        ! IsInstance may return -1 with its own exception "
-                    "set; don't clobber it\n";
-      converters += "        if (.not. c_associated(PyErr_Occurred())) then\n";
       converters += fmt::format(
-          "            call PyErr_SetString(PyExc_TypeError, c_loc({}))\n",
+          "        if (PyObject_IsInstance(p, py_{}_type_obj) /= 1) then\n",
+          tn);
+      converters += "            ! IsInstance may return -1 with its own "
+                    "exception set; don't clobber it\n";
+      converters +=
+          "            if (.not. c_associated(PyErr_Occurred())) then\n";
+      converters += fmt::format(
+          "                call PyErr_SetString(PyExc_TypeError, c_loc({}))\n",
           s_type);
+      converters += "            end if\n";
+      converters += "            return\n";
       converters += "        end if\n";
-      converters += "        return\n";
-      converters += "    end if\n";
-      converters += "    call c_f_pointer(p, obj)\n";
+      converters += "        call c_f_pointer(p, obj)\n";
       converters +=
-          fmt::format("    call c_f_pointer(obj%{}, r)\n", ptr_field(tsym));
-      converters += "end function\n\n";
+          fmt::format("        call c_f_pointer(obj%{}, r)\n", ptr_field(tsym));
+      converters += "    end function\n\n";
 
-      converters += fmt::format("function {}(data, owner) result(r)\n",
+      converters += fmt::format("    function {}(data, owner) result(r)\n",
                                 view_pyobject_fn(tn));
-      converters += fmt::format("    use py_{}_mod\n", modpy);
-      converters += "    use iso_c_binding\n";
-      converters += "    implicit none\n";
-      converters += "    type(c_ptr), value :: data, owner\n";
-      converters += "    type(c_ptr) :: r\n";
+      converters += "        type(c_ptr), value :: data, owner\n";
+      converters += "        type(c_ptr) :: r\n";
       converters +=
-          fmt::format("    type({}), pointer :: obj\n", struct_name(tsym));
-      converters += "    r = c_null_ptr\n";
+          fmt::format("        type({}), pointer :: obj\n", struct_name(tsym));
+      converters += "        r = c_null_ptr\n";
       converters += guard;
       converters += fmt::format(
-          "    r = PyType_GenericAlloc(py_{}_type_obj, 0_c_ptrdiff_t)\n", tn);
-      converters += "    if (.not. c_associated(r)) return\n";
-      converters += "    call c_f_pointer(r, obj)\n";
-      converters += fmt::format("    obj%{} = data\n", ptr_field(tsym));
-      converters += "    obj%owner = owner\n";
-      converters += "    call Py_IncRef(owner)\n";
-      converters += "end function\n\n";
+          "        r = PyType_GenericAlloc(py_{}_type_obj, 0_c_ptrdiff_t)\n",
+          tn);
+      converters += "        if (.not. c_associated(r)) return\n";
+      converters += "        call c_f_pointer(r, obj)\n";
+      converters += fmt::format("        obj%{} = data\n", ptr_field(tsym));
+      converters += "        obj%owner = owner\n";
+      converters += "        call Py_IncRef(owner)\n";
+      converters += "    end function\n\n";
     }
+    if (!converters.empty())
+      converters = "    ! ===== PyObject converters for this module's wrapped "
+                   "types (use-associated by other wrappers) =====\n" +
+                   converters;
   }
 
   return render(tpl_module, {
@@ -375,7 +365,6 @@ str_t codegen_module(module_info_t const &m_in, bool internal_init) {
                                 {"structs", structs},
                                 {"cstrings", strings.decls()},
                                 {"tables", table_decls},
-                                {"interfaces", interfaces},
                                 {"procedures", procedures},
                                 {"pyinit", pyinit},
                                 {"converters", converters},

@@ -11,13 +11,9 @@ module py_{modpy}_mod
 {cstrings}
     ! ===== Persistent tables (target+save keeps c_loc valid for the type's lifetime) =====
 {tables}
-    ! ===== PyObject converters for derived types wrapped in other files (matched by name at link time) =====
-{interfaces}
 contains
 
 {procedures}
 {pyinit}
-end module py_{modpy}_mod
-
-! ===== PyObject converters for this module's wrapped types (external; callable from other wrapper files) =====
 {converters}
+end module py_{modpy}_mod

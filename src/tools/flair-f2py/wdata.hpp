@@ -71,6 +71,10 @@ struct pkg_info_t {
   // folded module name -> module-search dirs (-I/-J/-module-dir values) of
   // its defining database entry, for compiling that module's wrapper
   std::map<str_t, std::vector<str_t>> module_search_dirs;
+  // folded module names in dependency-first (depgraph post-order) order;
+  // wrappers must be compiled in this order because consumer wrappers
+  // use-associate the producer wrappers' converter procedures
+  std::vector<str_t> module_order;
 };
 
 struct wdata_t {

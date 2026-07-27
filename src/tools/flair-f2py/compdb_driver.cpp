@@ -179,8 +179,10 @@ int run_compdb_mode(std::string const &compdb_path,
       if (eargs[i] == "-I" || eargs[i] == "-J" || eargs[i] == "-module-dir")
         if (std::find(dirs.begin(), dirs.end(), eargs[i + 1]) == dirs.end())
           dirs.push_back(eargs[i + 1]);
-    for (auto const &name : pf.defined)
+    for (auto const &name : pf.defined) {
       pkg.module_search_dirs[name] = dirs;
+      pkg.module_order.push_back(name);
+    }
   }
   wdata->pkg = std::move(pkg);
 

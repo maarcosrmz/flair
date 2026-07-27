@@ -230,7 +230,9 @@ class CaseBuilder:
         """Compile py_<mod>.F90 and link the importable <mod>.so.
 
         extra_sos: previously built extensions whose FLAIR_* converter
-        symbols this one needs (cross-module cases).
+        symbols this one needs (cross-module cases). Their wrappers must
+        have been compiled earlier in this directory so their py_*_mod.mod
+        files are found here at compile time.
         """
         self._run(
             [self.flang, "-fPIC", "-I", self.runtime_dir, "-c", f"py_{mod}.F90"]
@@ -282,7 +284,8 @@ class CaseBuilder:
 
         sources must be in dependency order; each wrapped extension links all
         previously built extensions (crossmod recipe: ops.so links vec.so so
-        the FLAIR_<type>_from_PyObject symbol resolves).
+        py_vec_mod's FLAIR_<type>_from_PyObject symbol resolves; py_vec_mod.mod
+        is already in the build dir from the earlier compile).
         """
         self.add_sources(*sources)
         self.compile(*sources)
