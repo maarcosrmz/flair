@@ -4,6 +4,7 @@
 
 #include <algorithm>
 
+#include "codegen/utils.hpp"
 #include "flu/paths.hpp"
 #include "flu/symbols.hpp"
 #include "traversal.hpp"
@@ -53,9 +54,11 @@ void traverse_global_scope(const sema::Scope &root,
     if (sym.test(sema::Symbol::Flag::ModFile))
       continue;
 
-    // With --wrap, only modules defined in the designated files are wrapped;
-    // the remaining inputs are resolved for their symbols only.
-    if (not wrap_set.empty()) {
+    // With --wrap, only modules defined in the designated files -- plus the
+    // converter producers promoted into `wrap_modules` (see run_wrap_pipeline)
+    // -- are wrapped; the remaining inputs are resolved for their symbols only.
+    if (not wrap_set.empty() and
+        wdata->wrap_modules.count(codegen::fold_lower(name.ToString())) == 0) {
       auto const path = flu::defining_path(context, sym);
       if (not path or
           wrap_set.find(flu::normalized_path(*path)) == wrap_set.end())

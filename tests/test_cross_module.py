@@ -74,14 +74,30 @@ def test_crossmod_args_and_dispatch_single_run(builder):
     b.run_check("check_crossmod.py")
 
 
-def test_crossmod_wrap_filter(builder):
-    """--wrap restricts wrapping to the designated inputs: dependencies are
-    resolved for their symbols only, and the separate-generation warning
-    stays because the producer wrapper is not part of this run."""
+def test_crossmod_wrap_converter_closure(builder):
+    """A wrap set naming only the consumer still gets its producer: ops_mod
+    takes a vec2 across its API and use-associates that type's converters, so
+    vec_mod is added to the wrap set and no separate generation is needed."""
     builder.add_sources("vec_mod.F90", "ops_mod.F90")
     proc = builder.flair_all("vec_mod.F90", "ops_mod.F90", wrap=["ops_mod.F90"])
 
-    assert builder.generated_missing("vec")
+    assert not builder.generated_missing("vec")
     assert "use py_vec_mod, only: FLAIR_vec2_from_PyObject" in \
         builder.generated("ops")
-    assert "generated separately, compiled before this one" in proc.stderr
+    assert "generated separately, compiled before this one" not in proc.stderr
+
+
+def test_crossmod_wrap_closure_is_transitive(builder):
+    """world_mod -> scene_mod -> geom_mod: promoting scene_mod exposes the
+    point_t it embeds, so closing the wrap set takes a second round."""
+    builder.add_sources("geom.f90", "scene.f90", "world.f90")
+    proc = builder.flair_all("geom.f90", "scene.f90", "world.f90",
+                             wrap=["world.f90"])
+
+    assert not builder.generated_missing("scene")  # direct producer
+    assert not builder.generated_missing("geom")   # producer of the producer
+    assert "use py_scene_mod, only: FLAIR_scene_t_from_PyObject" in \
+        builder.generated("world")
+    assert "use py_geom_mod, only: FLAIR_point_t_from_PyObject" in \
+        builder.generated("scene")
+    assert "generated separately, compiled before this one" not in proc.stderr

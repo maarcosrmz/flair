@@ -2,6 +2,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -13,10 +14,92 @@
 #include "codegen/package.hpp"
 #include "codegen/utils.hpp"
 #include "flu/diagnostics.hpp"
+#include "flu/symbols.hpp"
 #include "pipeline.hpp"
 #include "traversal.hpp"
 
 using namespace codegen;
+
+// ===========================================================================
+// Converter-producer closure
+//
+// A wrapped module that exchanges a foreign derived type across its API
+// use-associates that type's FLAIR_* converters from the *producer's* wrapper
+// module. Those converters are module procedures, so a producer left out of
+// the wrap set is a compile error in the consumer's wrapper, not something the
+// user can fix after the fact. The wrap set is therefore closed over the
+// modules owning those types.
+//
+// The scan mirrors the four places codegen records a Foreign type
+// (note_ext_type): procedure dummies, ctor kwargs, inline scalar components,
+// and module variables. It classifies with codegen's own classify_dtype so the
+// closure cannot drift from what codegen actually emits, and it deliberately
+// touches nothing that reports diagnostics -- it runs before codegen and, on
+// promotion, again after re-traversal.
+// ===========================================================================
+
+static void note_owner(sema::DeclTypeSpec const *t, module_info_t const &m,
+                       std::set<std::string> &out) {
+  if (t == nullptr)
+    return;
+  if (auto const c = classify_dtype(*t, m); c.cls == dtype_class::Foreign)
+    out.insert(fold_lower(c.owner));
+}
+
+// Dummies of a procedure symbol; `sym` may be a type-bound binding.
+static void scan_dummies(sema::Symbol const &sym, module_info_t const &m,
+                         std::set<std::string> &out) {
+  sema::Symbol const *proc = &sym;
+  if (auto const *actual = flu::binding_actual(sym))
+    proc = actual;
+  auto const *sub = proc->detailsIf<sema::SubprogramDetails>();
+  if (sub == nullptr)
+    return;
+  for (sema::Symbol const *d : sub->dummyArgs())
+    if (d != nullptr)
+      note_owner(d->GetType(), m, out);
+}
+
+static void scan_generic(sema::Symbol const &generic, module_info_t const &m,
+                         std::set<std::string> &out) {
+  for (auto const &spec : flu::get_specific_procs(generic))
+    scan_dummies(spec, m, out);
+}
+
+static std::set<std::string>
+converter_producers(std::vector<module_info_t> const &modules) {
+  std::set<std::string> owners;
+  for (auto const &m : modules) {
+    for (auto const &fn : m.functions)
+      if (fn.ptr != nullptr)
+        scan_dummies(*fn.ptr, m, owners);
+    for (auto const &iface : m.interfaces)
+      if (iface.ptr != nullptr)
+        scan_generic(*iface.ptr, m, owners);
+    for (sym_ptr_t v : m.variables)
+      if (v != nullptr)
+        note_owner(v->GetType(), m, owners);
+
+    for (auto const &[name, dt] : m.derived_types) {
+      if (dt.ptr == nullptr)
+        continue;
+      if (dt.ctor.ptr != nullptr)
+        scan_generic(*dt.ctor.ptr, m, owners);
+      if (dt.init.ptr != nullptr)
+        scan_dummies(*dt.init.ptr, m, owners);
+      for (auto const &mth : dt.methods)
+        if (mth.ptr != nullptr)
+          scan_dummies(*mth.ptr, m, owners);
+      // Same accept condition as public_fields, minus its warnings: only
+      // inline scalar derived components become properties.
+      for (auto const &comp : flu::public_components(*dt.ptr))
+        if (flu::rank_of(comp) == 0 && !flu::is_pointer(comp) &&
+            !flu::is_allocatable(comp))
+          note_owner(comp->GetType(), m, owners);
+    }
+  }
+  return owners;
+}
 
 // The compilation database records compile steps only, so the link inputs
 // (the project's objects or libraries) cannot be derived and stay a
@@ -117,6 +200,27 @@ package_outputs(wdata_t &wdata, llvm::raw_ostream &out,
 bool run_wrap_pipeline(sema::SemanticsContext &context,
                        std::shared_ptr<wdata_t> wdata, llvm::raw_ostream &out) {
   traverse_global_scope(context.globalScope(), wdata, context);
+
+  // Close the wrap set over its converter producers. Promoting one module can
+  // expose foreign types of its own, so re-traverse until nothing new appears;
+  // `wrap_modules` only grows and is bounded by the modules in scope, and a
+  // producer that is not in scope at all (wrappable only by a separate run)
+  // simply never shows up, leaving note_ext_type's warning to say so.
+  while (not wdata->wrap_files.empty()) {
+    std::set<std::string> wrapped;
+    for (auto const &mi : wdata->modules)
+      wrapped.insert(fold_lower(mi.name));
+
+    bool promoted = false;
+    for (auto const &owner : converter_producers(wdata->modules))
+      if (wrapped.count(owner) == 0 && wdata->wrap_modules.insert(owner).second)
+        promoted = true;
+    if (not promoted)
+      break;
+
+    wdata->modules.clear();
+    traverse_global_scope(context.globalScope(), wdata, context);
+  }
 
   // Order wrapper modules dependency-first (depgraph post-order): a consumer
   // wrapper use-associates the producer wrapper's converters, so the producer

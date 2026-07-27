@@ -24,9 +24,12 @@ int main(int argc, const char **argv) try {
   // (its option table rejects unknown flags). `--wrap <file>` (repeatable)
   // composes the wrap set from its arguments: the modules defined in the
   // given input files are wrapped, the remaining inputs are resolved for
-  // their symbols only. Without any `--wrap`, every input is wrapped. The
-  // token `--wrap @entry` stands for the entry's own modules plus the
-  // modules it USEs directly (compdb mode only). `--compdb <path>` together
+  // their symbols only. The set is then closed over its converter producers
+  // -- modules defining a derived type that crosses a wrapped module's API --
+  // since the consumer's wrapper use-associates their converters. Without any
+  // `--wrap`, every input is wrapped. The token `--wrap @entry` stands for the
+  // entry's own modules plus the modules it USEs directly (compdb mode only).
+  // `--compdb <path>` together
   // with `--entry <file>` switches to compilation-database mode, which emits
   // one combined package extension; `--pkg <name>` overrides the package
   // name (default: derived from the entry's file stem).

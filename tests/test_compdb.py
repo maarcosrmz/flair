@@ -114,9 +114,9 @@ def test_compdb_wrap_entry(builder):
     leaf_mod two hops away, which the bare closure would wrap. Further --wrap
     arguments compose with it rather than replacing it.
 
-    Note the shallow set holds only because leaf_mod's types stay out of
-    mid_mod's API; a derived type crossing that boundary would leave py_mid
-    importing a producer wrapper the wrap set omits.
+    leaf_mod stays out only because its types never cross mid_mod's API; one
+    that did would promote it as a converter producer (see
+    test_compdb_wrap_converter_closure).
     """
     b = builder
     b.add_sources("leaf_mod.F90", "mid_mod.F90", "top_mod.F90")
@@ -157,10 +157,11 @@ def test_compdb_wrap_entry_needs_compdb(builder):
     assert "requires --compdb mode" in proc.stderr
 
 
-def test_compdb_wrap_restriction(builder):
-    """A wrap set naming one file keeps the dependency modules
-    resolution-only in compdb mode; the package then contains only the
-    wrapped module."""
+def test_compdb_wrap_converter_closure(builder):
+    """A wrap set naming only ops_mod still yields a package that builds: the
+    vec2 crossing ops_mod's API pulls its producer vec_mod into the wrap set,
+    ahead of ops_mod in the build script. Modules whose types stay out of the
+    wrapped API remain resolution-only (see test_compdb_wrap_entry)."""
     b = builder
     b.add_sources("vec_mod.F90", "ops_mod.F90")
     write_compdb(b, [
@@ -170,11 +171,19 @@ def test_compdb_wrap_restriction(builder):
          "file": "vec_mod.F90"},
     ])
 
-    proc = b.flair_compdb("compile_commands.json", "ops_mod.F90",
+    proc = b.flair_compdb("compile_commands.json", "ops_mod.F90", pkg="proj",
                           wrap=["ops_mod.F90"])
 
-    assert b.generated_missing("vec")
+    assert not b.generated_missing("vec")
     assert "FLAIR_vec2_from_PyObject" in b.generated("ops")
-    assert "generated separately, compiled before this one" in proc.stderr
-    pkg = b.generated("ops_pkg")
-    assert "FLAIR_init_ops" in pkg and "FLAIR_init_vec" not in pkg
+    assert "generated separately, compiled before this one" not in proc.stderr
+    pkg = b.generated("proj_pkg")
+    assert "FLAIR_init_ops" in pkg and "FLAIR_init_vec" in pkg
+
+    script = (b.tmp / "build_proj.sh").read_text()
+    assert script.index("py_vec.F90") < script.index("py_ops.F90")
+
+    # the promoted producer makes the narrowed wrap set actually buildable
+    b.compile("vec_mod.F90", "ops_mod.F90")
+    b.run_build_script("proj", ["vec_mod.o", "ops_mod.o"])
+    b.run_check("check_pkg_crossmod.py")

@@ -1,6 +1,7 @@
 #pragma once
 #include <map>
 #include <optional>
+#include <set>
 #include <vector>
 
 #include "flang/Semantics/symbol.h"
@@ -83,6 +84,12 @@ struct wdata_t {
 
   // Source files whose modules get wrapped (--wrap). Empty: wrap all inputs.
   std::vector<str_t> wrap_files;
+
+  // Folded names of modules added to the wrap set because a module already in
+  // it exchanges one of their derived types across its API: the consumer
+  // wrapper use-associates the converters from the producer's wrapper, so the
+  // producer must be wrapped too. Only consulted while `wrap_files` narrows.
+  std::set<str_t> wrap_modules;
 
   // Engaged only in compdb mode: combined-package codegen.
   std::optional<pkg_info_t> pkg;
