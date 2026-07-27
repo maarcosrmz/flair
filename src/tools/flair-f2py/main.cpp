@@ -135,6 +135,13 @@ int main(int argc, const char **argv) try {
   // the handler at the bottom, so that mode functions and main share one path.
   flu::logger const report = flu::logger::report();
 
+  // Invoked with nothing to do: the usage block is the answer, but this is a
+  // misuse, so it goes to stderr and fails (--help prints it on request).
+  if (argc == 1) {
+    llvm::errs() << usage;
+    return EXIT_FAILURE;
+  }
+
   // ----- Parse the options in the command line
   options_t opts = parse_options(argc, argv);
 

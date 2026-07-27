@@ -112,6 +112,16 @@ int run_single_mode(llvm::ArrayRef<const char *> args,
           flang->getInvocation(), args, diags, argv0))
     throw std::runtime_error("Failed creating compiler invocation.");
 
+  // Without input files flang substitutes stdin, which for a wrapper generator
+  // means parsing an empty program and reporting success having generated
+  // nothing. Take it as the misuse it almost always is.
+  {
+    auto const &inputs = flang->getInvocation().getFrontendOpts().inputs;
+    if (inputs.empty() || (inputs.size() == 1 && inputs.front().isFile() &&
+                           inputs.front().getFile() == "-"))
+      throw std::runtime_error("No input files. See --help for usage.");
+  }
+
   // -fintrinsic-modules-path lands in the preprocessor options; the semantics
   // context reads intrinsic modules from the Fortran options, so mirror it
   // there. The distro path is a last resort for an unconfigured invocation.

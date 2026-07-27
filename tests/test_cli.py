@@ -34,8 +34,21 @@ def test_verbose_is_off_by_default(flair_bin):
     """Progress notes stay behind -v: a default run's stderr carries
     diagnostics only, so tests and scripts can assert on it."""
     assert run(flair_bin, "--version").stderr == ""
-    assert run(flair_bin).stderr == ""
     assert "Based on" in run(flair_bin, "-v").stderr
+
+
+def test_nothing_to_do_is_a_misuse(flair_bin):
+    """Invoked with no arguments, or with flags but no source: usage on
+    stderr and a nonzero exit, rather than silently succeeding without
+    generating anything. --help stays the deliberate, stdout, exit-0 path."""
+    bare = run(flair_bin)
+    assert bare.returncode != 0
+    assert "flair-f2py generates Python bindings" in bare.stderr
+    assert bare.stdout == ""
+
+    no_input = run(flair_bin, "-v")
+    assert no_input.returncode != 0
+    assert "No input files" in no_input.stderr
 
 
 def test_bad_flag_combinations_fail_early(flair_bin):
