@@ -166,9 +166,10 @@ class CaseBuilder:
                      expect_error: bool = False) -> subprocess.CompletedProcess:
         """flair-f2py in compilation-database mode: the USE closure of
         `entry` is discovered from compile_commands.json, each file parsed
-        with its own recorded flags, and the closure's modules wrapped
-        (restricted by --wrap when given) into one combined package
-        extension named --pkg (default: the entry's stem)."""
+        with its own recorded flags, and its modules wrapped into one
+        combined package extension named --pkg (default: the entry's stem).
+        --wrap composes the wrap set from its arguments (files, or the
+        '@entry' token); without it the whole closure is wrapped."""
         cmd = [self.flair_bin, "--compdb", compdb, "--entry", entry]
         if pkg is not None:
             cmd += ["--pkg", pkg]
@@ -189,7 +190,8 @@ class CaseBuilder:
         """One flair-f2py invocation over several sources (dependency order).
 
         USE'd modules are resolved from the sources of earlier inputs, so no
-        .mod files are needed. --wrap restricts which inputs get wrappers.
+        .mod files are needed. --wrap composes the wrap set from the inputs
+        it names; without it every input gets a wrapper.
         """
         cmd = [self.flair_bin]
         if self.intrinsic_mod_dir is not None:
@@ -217,6 +219,12 @@ class CaseBuilder:
 
     def generated_missing(self, mod: str) -> bool:
         return not self.generated_path(mod).exists()
+
+    def clear_generated(self) -> None:
+        """Drop the generated wrappers, so a second flair-f2py run in the
+        same case is judged on what it writes and not on leftovers."""
+        for path in self.tmp.glob("py_*.F90"):
+            path.unlink()
 
     def link_lib(self, libname: str, *objs: str) -> None:
         """Link runtime + wrapped-module objects into one shared library."""

@@ -1,9 +1,13 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <map>
 #include <memory>
+#include <set>
 #include <stdexcept>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include "flang/Frontend/CompilerInstance.h"
 #include "flang/Frontend/CompilerInvocation.h"
@@ -144,9 +148,12 @@ int run_compdb_mode(std::string const &compdb_path,
 
   // The graph roots are the entry plus every wrap file: a wrap file need not
   // be in the entry's USE closure (e.g. a bindings-only shim module), but it
-  // must still be parsed to be wrapped.
+  // must still be parsed to be wrapped. WRAP_ENTRY_TOKEN names no file and
+  // adds no root -- it expands to modules of the entry's own closure.
   std::vector<std::string> roots{entry_abs};
   for (auto const &w : wrap_files) {
+    if (w == WRAP_ENTRY_TOKEN)
+      continue;
     std::string abs = flu::normalized_path(w);
     if (std::find(roots.begin(), roots.end(), abs) == roots.end())
       roots.push_back(std::move(abs));
@@ -172,6 +179,7 @@ int run_compdb_mode(std::string const &compdb_path,
   pkg.name = sanitize_identifier(pkg_name.empty() ? default_pkg_name(entry_abs)
                                                   : std::move(pkg_name));
   pkg.runtime_src = locate_runtime_src(argv0);
+  std::map<std::string, std::string> module_file; // folded name -> definer
   for (auto const &pf : files) {
     std::vector<std::string> dirs;
     auto const &eargs = pf.entry->args;
@@ -182,6 +190,7 @@ int run_compdb_mode(std::string const &compdb_path,
     for (auto const &name : pf.defined) {
       pkg.module_search_dirs[name] = dirs;
       pkg.module_order.push_back(name);
+      module_file.emplace(name, pf.entry->file);
     }
   }
   wdata->pkg = std::move(pkg);
@@ -194,7 +203,33 @@ int run_compdb_mode(std::string const &compdb_path,
     parse::Walk(tree, *wdata->collector.get());
   }
 
-  // Empty wrap set: wrap every module of the closure.
+  // The wrap set is composed from the --wrap arguments; empty means wrap
+  // every module of the closure. WRAP_ENTRY_TOKEN contributes the files
+  // defining the entry's own modules and the ones it USEs directly -- a
+  // deliberately shallow set: what the entry itself names, not everything
+  // reachable from it. USEd modules that no database entry defines
+  // (intrinsic modules, external-library .mod files) have no source to
+  // wrap and are skipped.
+  auto const token =
+      std::find(wrap_files.begin(), wrap_files.end(), WRAP_ENTRY_TOKEN);
+  if (token != wrap_files.end()) {
+    std::vector<std::string> expanded;
+    for (auto const &pf : files) {
+      if (pf.entry->file != entry_abs)
+        continue;
+      std::set<std::string> names(pf.defined.begin(), pf.defined.end());
+      names.insert(pf.used.begin(), pf.used.end());
+      for (auto const &name : names)
+        if (auto const it = module_file.find(name); it != module_file.end())
+          expanded.push_back(it->second);
+      break;
+    }
+    wrap_files.erase(token);
+    for (auto &f : expanded)
+      if (std::find(wrap_files.begin(), wrap_files.end(), f) ==
+          wrap_files.end())
+        wrap_files.push_back(std::move(f));
+  }
   wdata->wrap_files = std::move(wrap_files);
 
   return run_wrap_pipeline(SemanticsCtx, wdata, llvm::errs()) ? EXIT_SUCCESS

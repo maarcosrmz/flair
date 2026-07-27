@@ -22,11 +22,14 @@ int main(int argc, const char **argv) try {
 
   // Extract flair-specific options before Flang parses the command line
   // (its option table rejects unknown flags). `--wrap <file>` (repeatable)
-  // restricts wrapping to the modules defined in the given input files; the
-  // remaining inputs are resolved for their symbols only. `--compdb <path>`
-  // together with `--entry <file>` switches to compilation-database mode,
-  // which emits one combined package extension; `--pkg <name>` overrides the
-  // package name (default: derived from the entry's file stem).
+  // composes the wrap set from its arguments: the modules defined in the
+  // given input files are wrapped, the remaining inputs are resolved for
+  // their symbols only. Without any `--wrap`, every input is wrapped. The
+  // token `--wrap @entry` stands for the entry's own modules plus the
+  // modules it USEs directly (compdb mode only). `--compdb <path>` together
+  // with `--entry <file>` switches to compilation-database mode, which emits
+  // one combined package extension; `--pkg <name>` overrides the package
+  // name (default: derived from the entry's file stem).
   std::vector<std::string> wrap_files;
   std::string compdb_path;
   std::string entry_file;
@@ -65,6 +68,10 @@ int main(int argc, const char **argv) try {
   }
   if (!pkg_name.empty())
     throw std::runtime_error("--pkg requires --compdb mode.");
+  for (auto const &w : wrap_files)
+    if (w == WRAP_ENTRY_TOKEN)
+      throw std::runtime_error("--wrap " + std::string(WRAP_ENTRY_TOKEN) +
+                               " requires --compdb mode.");
 
   // ------- main tool
 

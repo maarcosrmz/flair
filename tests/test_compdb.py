@@ -108,9 +108,59 @@ def test_compdb_wrap_outside_entry_closure(builder):
     assert "FLAIR_init_cfg" in pkg and "FLAIR_init_vec" in pkg
 
 
+def test_compdb_wrap_entry(builder):
+    """'--wrap @entry' expands to the entry's own modules plus the ones it
+    USEs directly -- a deliberately shallow set: top_mod and mid_mod, but not
+    leaf_mod two hops away, which the bare closure would wrap. Further --wrap
+    arguments compose with it rather than replacing it.
+
+    Note the shallow set holds only because leaf_mod's types stay out of
+    mid_mod's API; a derived type crossing that boundary would leave py_mid
+    importing a producer wrapper the wrap set omits.
+    """
+    b = builder
+    b.add_sources("leaf_mod.F90", "mid_mod.F90", "top_mod.F90")
+    write_compdb(b, [
+        {"command": "gfortran -c -o top_mod.o top_mod.F90",
+         "file": "top_mod.F90"},
+        {"command": "gfortran -c -o mid_mod.o mid_mod.F90",
+         "file": "mid_mod.F90"},
+        {"command": "gfortran -c -o leaf_mod.o leaf_mod.F90",
+         "file": "leaf_mod.F90"},
+    ])
+
+    b.flair_compdb("compile_commands.json", "top_mod.F90", pkg="proj",
+                   wrap=["@entry"])
+    assert not b.generated_missing("top")
+    assert not b.generated_missing("mid")
+    assert b.generated_missing("leaf")
+    pkg = b.generated("proj_pkg")
+    assert "FLAIR_init_top" in pkg and "FLAIR_init_leaf" not in pkg
+
+    # the token composes with explicitly named files
+    b.clear_generated()
+    b.flair_compdb("compile_commands.json", "top_mod.F90", pkg="proj",
+                   wrap=["@entry", "leaf_mod.F90"])
+    assert not b.generated_missing("leaf")
+
+    # without --wrap the whole closure is wrapped, as before
+    b.clear_generated()
+    b.flair_compdb("compile_commands.json", "top_mod.F90", pkg="proj")
+    assert not b.generated_missing("leaf")
+
+
+def test_compdb_wrap_entry_needs_compdb(builder):
+    """The @entry token has nothing to derive from outside compdb mode."""
+    b = builder
+    b.add_sources("leaf_mod.F90")
+    proc = b.flair_all("leaf_mod.F90", wrap=["@entry"], expect_error=True)
+    assert "requires --compdb mode" in proc.stderr
+
+
 def test_compdb_wrap_restriction(builder):
-    """--wrap keeps dependency modules resolution-only in compdb mode; the
-    package then contains only the wrapped module."""
+    """A wrap set naming one file keeps the dependency modules
+    resolution-only in compdb mode; the package then contains only the
+    wrapped module."""
     b = builder
     b.add_sources("vec_mod.F90", "ops_mod.F90")
     write_compdb(b, [
