@@ -39,6 +39,18 @@ str_t module_pyname(str_t const &m) {
   return m;
 }
 
+// Run-global: the prefix is a property of the whole invocation, and the sites
+// that need it (module def, type specs, the dispatchers' tp_name literals)
+// sit at very different depths of the codegen call tree.
+static str_t package_prefix;
+
+void set_package_prefix(str_t const &pkg) { package_prefix = pkg; }
+
+str_t module_pyqual(str_t const &m) {
+  str_t const modpy = module_pyname(m);
+  return package_prefix.empty() ? modpy : package_prefix + "." + modpy;
+}
+
 bool has_wrappable(module_info_t const &m) {
   return !m.derived_types.empty() || !m.functions.empty() ||
          !m.variables.empty();
@@ -46,6 +58,8 @@ bool has_wrappable(module_info_t const &m) {
 
 str_t codegen_module(module_info_t const &m_in, bool internal_init) {
   str_t const modpy = module_pyname(m_in.name);
+  // What python sees; differs from modpy only in a combined package build.
+  str_t const pyqual = module_pyqual(m_in.name);
   string_pool_t strings;
   std::unordered_set<sym_ptr_t>
       bound;             // type-bound actuals, excluded from module functions
@@ -119,7 +133,7 @@ str_t codegen_module(module_info_t const &m_in, bool internal_init) {
       procedures += gen_getset(dt, f, m, strings, tables[tn].getset_fills,
                                tables[tn].ng, ext_types);
 
-    tables[tn].spec = spec_fills(tn, clsname(*dt.ptr), modpy, strings);
+    tables[tn].spec = spec_fills(tn, clsname(*dt.ptr), pyqual, strings);
     tables[tn].create = create_fills(tn, clsname(*dt.ptr), strings);
   }
 
@@ -226,7 +240,7 @@ str_t codegen_module(module_info_t const &m_in, bool internal_init) {
   pyinit_fills += "        ! --- module method table ---\n" + modfn_fills;
   pyinit_fills += "        ! --- module def ---\n";
   pyinit_fills += fmt::format("        {0}%m_name     = c_loc({1})\n", md,
-                              strings.intern(modpy));
+                              strings.intern(pyqual));
   pyinit_fills += fmt::format("        {0}%m_doc      = c_null_ptr\n", md);
   pyinit_fills += fmt::format("        {0}%m_size     = -1_c_ptrdiff_t\n", md);
   pyinit_fills +=
@@ -292,7 +306,7 @@ str_t codegen_module(module_info_t const &m_in, bool internal_init) {
   str_t converters;
   if (!m.derived_types.empty()) {
     str_t const s_noinit =
-        strings.intern("python module '" + modpy +
+        strings.intern("python module '" + pyqual +
                        "' is not initialized; import it before "
                        "using its wrapped types");
     for (auto const &[name, dt] : m.derived_types) {

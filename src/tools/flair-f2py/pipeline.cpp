@@ -238,6 +238,9 @@ bool run_wrap_pipeline(sema::SemanticsContext &context,
   }
 
   note_run_modules(wdata->modules);
+  // Python-visible names carry the package prefix; set it either way so it
+  // cannot leak from a previous run into a single-mode one.
+  set_package_prefix(wdata->pkg ? wdata->pkg->name : std::string{});
   std::vector<std::pair<std::string, std::string>> outputs;
   bool ok = true;
   if (wdata->pkg) {

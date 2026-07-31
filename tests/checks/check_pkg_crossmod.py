@@ -9,6 +9,13 @@ assert sys.modules["proj.vec"] is proj.vec
 assert sys.modules["proj.ops"] is proj.ops
 from proj.vec import Vec2
 
+# the submodules name themselves the way they are reachable, and their types
+# agree: __module__ is the qualified module, not the bare fortran-derived one
+assert proj.__name__ == "proj", proj.__name__
+assert proj.vec.__name__ == "proj.vec", proj.vec.__name__
+assert Vec2.__module__ == "proj.vec", Vec2.__module__
+assert Vec2.__qualname__ == "Vec2", Vec2.__qualname__
+
 p = Vec2()
 p.x = 1.0
 p.y = 2.0

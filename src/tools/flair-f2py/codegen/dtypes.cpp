@@ -760,12 +760,12 @@ str_t slot_fills(str_t const &tn) {
   return s;
 }
 
-str_t spec_fills(str_t const &tn, str_t const &cls, str_t const &modpy,
+str_t spec_fills(str_t const &tn, str_t const &cls, str_t const &pyqual,
                  string_pool_t &strings) {
   str_t const sp = tn + "_spec";
   str_t s = fmt::format("        ! --- {} spec ---\n", tn);
   s += fmt::format("        {0}%name      = c_loc({1})\n", sp,
-                   strings.intern(modpy + "." + cls));
+                   strings.intern(pyqual + "." + cls));
   s += fmt::format("        {0}%basicsize = int(c_sizeof(dummy_{1}), c_int)\n",
                    sp, tn);
   s += fmt::format("        {0}%itemsize  = 0\n", sp);

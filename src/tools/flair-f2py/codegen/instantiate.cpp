@@ -46,9 +46,10 @@ struct combo_t {
 };
 
 // The tp_name a wrapped instance carries at runtime, set by the file that
-// wraps the *defining* module (same keying as the interface dispatcher).
+// wraps the *defining* module (same keying as the interface dispatcher):
+// the package-qualified module name, matching what spec_fills emits.
 str_t tp_name_of(sema::Symbol const &tsym) {
-  return module_pyname(flu::owning_module_name(tsym)) + "." + clsname(tsym);
+  return module_pyqual(flu::owning_module_name(tsym)) + "." + clsname(tsym);
 }
 
 // Advance the odometer over |types|^dims tuples (last dimension fastest).

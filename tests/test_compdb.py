@@ -175,10 +175,18 @@ def test_compdb_wrap_converter_closure(builder):
                           wrap=["ops_mod.F90"])
 
     assert not b.generated_missing("vec")
-    assert "FLAIR_vec2_from_PyObject" in b.generated("ops")
+    vec, ops = b.generated("vec"), b.generated("ops")
+    assert "FLAIR_vec2_from_PyObject" in ops
     assert "generated separately, compiled before this one" not in proc.stderr
     pkg = b.generated("proj_pkg")
     assert "FLAIR_init_ops" in pkg and "FLAIR_init_vec" in pkg
+
+    # python-visible names carry the package prefix; the fortran-side
+    # identifiers (module, init symbol, file name) must not
+    assert '"proj.vec"' in vec and '"proj.vec.Vec2"' in vec
+    assert "module py_vec_mod" in vec and "FLAIR_init_vec" in vec
+    # the consumer's dispatcher keys on the same qualified tp_name
+    assert 'c_string_eq(pytype%tp_name, "proj.vec.Vec2")' in ops
 
     script = (b.tmp / "build_proj.sh").read_text()
     assert script.index("py_vec.F90") < script.index("py_ops.F90")
