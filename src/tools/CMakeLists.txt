@@ -19,8 +19,13 @@ function(add_tool TOOL_NAME)
     FLAIR_VERSION="${flair_VERSION}" GIT_HASH="${PROJECT_GIT_HASH}")
   # clang_llvm provides clang::tooling (compile_commands.json loading)
   target_link_libraries(${TOOL_NAME} PRIVATE flu fmt::fmt flang_llvm clang_llvm)
-  set_target_properties(${TOOL_NAME} PROPERTIES POSITION_INDEPENDENT_CODE ON)
-  
+  # LLVM/MLIR/Clang are linked from outside the build tree (LLVM_ROOT), and
+  # CMake drops the build rpath on install: without USE_LINK_PATH the installed
+  # tool cannot find libLLVM.so/libMLIR.so/libclang-cpp.so.
+  set_target_properties(${TOOL_NAME} PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+    INSTALL_RPATH_USE_LINK_PATH ON)
+
   # Install the tool
   install(TARGETS ${TOOL_NAME} DESTINATION bin)
 endfunction()

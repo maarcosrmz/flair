@@ -120,6 +120,10 @@ set(PYTHON_LIB_DEST_ROOT ${PYTHON_LIB_DEST_ROOT} CACHE PATH "Python library dest
 # Build flair components
 add_subdirectory(src)
 
+# The Fortran/Python runtime the generated wrappers compile against. The tools
+# locate it relative to their own executable, as <exe>/../share/flair.
+install(DIRECTORY share/flair DESTINATION ${CMAKE_INSTALL_DATADIR})
+
 # Regression tests (pytest; see tests/README.md)
 enable_testing()
 add_subdirectory(tests)
