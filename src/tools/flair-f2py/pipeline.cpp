@@ -24,7 +24,7 @@ using namespace codegen;
 // Converter-producer closure
 //
 // A wrapped module that exchanges a foreign derived type across its API
-// use-associates that type's FLAIR_* converters from the *producer's* wrapper
+// use-associates that type's converters from the *producer's* wrapper
 // module. Those converters are module procedures, so a producer left out of
 // the wrap set is a compile error in the consumer's wrapper, not something the
 // user can fix after the fact. The wrap set is therefore closed over the

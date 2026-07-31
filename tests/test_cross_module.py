@@ -4,7 +4,7 @@ generic-interface dispatch (crossmod)."""
 
 def test_scene_foreign_field(builder):
     """scene_t holds a point_t defined in another module; the wrapper must
-    import the foreign type and use-associate the FLAIR_point_t_* converters
+    import the foreign type and use-associate the point_t_* converters
     from the geom wrapper module."""
     b = builder.build(sources=["geom.f90", "scene.f90"])
 
@@ -14,14 +14,14 @@ def test_scene_foreign_field(builder):
 
     src = b.generated("scene")
     assert "use geom_mod, only: point_t" in src
-    assert "use py_geom_mod, only: FLAIR_point_t_from_PyObject, " \
-        "FLAIR_point_t_view_PyObject" in src
+    assert "use py_geom_mod, only: point_t_from_PyObject, " \
+        "point_t_view_PyObject" in src
     # runtime null guard for using scene before importing geom
     assert "is not initialized" in src
 
     # the converters are module procedures of the producer wrapper
     g = b.generated("geom")
-    assert g.index("function FLAIR_point_t_from_PyObject") \
+    assert g.index("function point_t_from_PyObject") \
         < g.index("end module py_geom_mod")
     assert g.rstrip().endswith("end module py_geom_mod")
 
@@ -34,7 +34,7 @@ def test_crossmod_args_and_dispatch(builder):
     b = builder.build(sources=["vec_mod.F90", "ops_mod.F90"])
 
     src = b.generated("ops")
-    assert "use py_vec_mod, only: FLAIR_vec2_from_PyObject" in src
+    assert "use py_vec_mod, only: vec2_from_PyObject" in src
     # specific procedures wrapped as internal helpers plus one dispatcher
     assert "py_mod_describe_vec" in src
     assert "py_mod_describe_int" in src
@@ -55,8 +55,8 @@ def test_scene_foreign_field_single_run(builder):
 
     src = b.generated("scene")
     assert "use geom_mod, only: point_t" in src
-    assert "use py_geom_mod, only: FLAIR_point_t_from_PyObject, " \
-        "FLAIR_point_t_view_PyObject" in src
+    assert "use py_geom_mod, only: point_t_from_PyObject, " \
+        "point_t_view_PyObject" in src
 
     b.run_check("check_scene.py")
 
@@ -67,7 +67,7 @@ def test_crossmod_args_and_dispatch_single_run(builder):
     b = builder.build_single_run(sources=["vec_mod.F90", "ops_mod.F90"])
 
     src = b.generated("ops")
-    assert "use py_vec_mod, only: FLAIR_vec2_from_PyObject" in src
+    assert "use py_vec_mod, only: vec2_from_PyObject" in src
     assert "py_mod_describe_vec" in src
     assert "py_mod_describe_int" in src
 
@@ -82,7 +82,7 @@ def test_crossmod_wrap_converter_closure(builder):
     proc = builder.flair_all("vec_mod.F90", "ops_mod.F90", wrap=["ops_mod.F90"])
 
     assert not builder.generated_missing("vec")
-    assert "use py_vec_mod, only: FLAIR_vec2_from_PyObject" in \
+    assert "use py_vec_mod, only: vec2_from_PyObject" in \
         builder.generated("ops")
     assert "generated separately, compiled before this one" not in proc.stderr
 
@@ -96,8 +96,8 @@ def test_crossmod_wrap_closure_is_transitive(builder):
 
     assert not builder.generated_missing("scene")  # direct producer
     assert not builder.generated_missing("geom")   # producer of the producer
-    assert "use py_scene_mod, only: FLAIR_scene_t_from_PyObject" in \
+    assert "use py_scene_mod, only: scene_t_from_PyObject" in \
         builder.generated("world")
-    assert "use py_geom_mod, only: FLAIR_point_t_from_PyObject" in \
+    assert "use py_geom_mod, only: point_t_from_PyObject" in \
         builder.generated("scene")
     assert "generated separately, compiled before this one" not in proc.stderr

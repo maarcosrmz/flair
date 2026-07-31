@@ -18,11 +18,12 @@ bool ends_with(str_t const &s, str_t const &suf);
 // Lowercase fold (Fortran is case-insensitive).
 str_t fold_lower(str_t s);
 
-// External symbols of the per-type converters, keyed solely on the
-// (case-folded) type name so producer and consumer, compiled in separate flair
-// invocations, agree on the linker name. `from` unwraps a PyObject to a Fortran
-// pointer (isinstance-checked); `view` wraps a component address + owning
-// PyObject into a new view instance.
+// Names of the per-type converters. They are module procedures of the
+// producer's wrapper, so the wrapper module already namespaces them; the name
+// is keyed solely on the (case-folded) type name, so producer and consumer,
+// compiled in separate flair invocations, agree on what to use-associate.
+// `from` unwraps a PyObject to a Fortran pointer (isinstance-checked); `view`
+// wraps a component address + owning PyObject into a new view instance.
 str_t from_pyobject_fn(str_t const &type_name);
 str_t view_pyobject_fn(str_t const &type_name);
 

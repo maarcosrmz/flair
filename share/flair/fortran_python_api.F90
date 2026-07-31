@@ -767,7 +767,7 @@ contains
     end function
 
     ! ===== Safe argument converters for intrinsic scalars =====
-    ! Counterparts of the generated FLAIR_<dtype>_from_PyObject converters.
+    ! Counterparts of the generated <dtype>_from_PyObject converters.
     ! CPython reports conversion failure in-band (-1 result + pending
     ! exception), so the result alone cannot carry the error; `ok` does.
     ! On failure the exception set by the C API call is left pending and the

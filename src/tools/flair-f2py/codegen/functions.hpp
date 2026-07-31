@@ -48,7 +48,7 @@ void note_run_modules(std::vector<module_info_t> const &modules);
 
 // Record a Foreign type for import/interface emission. False (with a real
 // diagnostic) when the folded name collides with a different type already
-// recorded (the name-keyed FLAIR_* linker symbols would collide) or the
+// recorded (the name-keyed converters would be ambiguous) or the
 // converter name would exceed Fortran's 63-char identifier limit; warns once
 // per type that its defining module must be wrapped and linked separately
 // (unless that happens in this very run, see note_run_modules).
@@ -67,7 +67,7 @@ bool note_ext_type(ext_types_t &ext_types,
 // codegen.
 //
 // A derived-type argument whose type is wrapped in another file (Foreign) is
-// unwrapped via the external `FLAIR_<t>_from_PyObject` converter (which
+// unwrapped via the producer wrapper's `<t>_from_PyObject` converter (which
 // isinstance-checks and sets the exception itself; a disassociated result
 // signals failure) -- but only when `ext_types` is non-null, in which case the
 // type is recorded so the module can emit the matching import + interface

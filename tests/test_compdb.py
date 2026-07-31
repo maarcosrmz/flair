@@ -28,7 +28,7 @@ def test_compdb_crossmod(builder):
 
     proc = b.flair_compdb("compile_commands.json", "ops_mod.F90", pkg="proj")
     assert "must be generated separately" not in proc.stderr
-    assert "use py_vec_mod, only: FLAIR_vec2_from_PyObject" in b.generated("ops")
+    assert "use py_vec_mod, only: vec2_from_PyObject" in b.generated("ops")
 
     # the build script compiles wrappers dependency-first (consumer wrappers
     # use-associate the producer wrapper's converters), not in entry order
@@ -176,7 +176,7 @@ def test_compdb_wrap_converter_closure(builder):
 
     assert not b.generated_missing("vec")
     vec, ops = b.generated("vec"), b.generated("ops")
-    assert "FLAIR_vec2_from_PyObject" in ops
+    assert "vec2_from_PyObject" in ops
     assert "generated separately, compiled before this one" not in proc.stderr
     pkg = b.generated("proj_pkg")
     assert "FLAIR_init_ops" in pkg and "FLAIR_init_vec" in pkg

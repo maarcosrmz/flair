@@ -86,7 +86,7 @@ bool note_ext_type(ext_types_t &ext_types, semantics::Symbol const &tsym) {
   if (!inserted) {
     if (it->second != &tsym) {
       // Same folded name, different type: the consumer would use-associate
-      // identically named FLAIR_* converters from both producer wrappers.
+      // identically named converters from both producer wrappers.
       flu::emit_error(
           tsym, "flair-f2py: derived type '" + n +
                     "' collides with an equally named type from "

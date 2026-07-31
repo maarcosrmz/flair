@@ -71,7 +71,7 @@ def flang() -> Path:
                 return Path(cand)
     pytest.skip(
         "LLVM flang not found; set FLANG=<path> (must be the same toolchain "
-        "used to build flair-f2py: generated FLAIR_* converter symbols rely "
+        "used to build flair-f2py: generated converter symbols rely "
         "on matching Fortran name mangling)"
     )
 
@@ -237,7 +237,7 @@ class CaseBuilder:
     def extension(self, mod: str, lib: str, *extra_sos: str) -> None:
         """Compile py_<mod>.F90 and link the importable <mod>.so.
 
-        extra_sos: previously built extensions whose FLAIR_* converter
+        extra_sos: previously built extensions whose converter
         symbols this one needs (cross-module cases). Their wrappers must
         have been compiled earlier in this directory so their py_*_mod.mod
         files are found here at compile time.
@@ -292,7 +292,7 @@ class CaseBuilder:
 
         sources must be in dependency order; each wrapped extension links all
         previously built extensions (crossmod recipe: ops.so links vec.so so
-        py_vec_mod's FLAIR_<type>_from_PyObject symbol resolves; py_vec_mod.mod
+        py_vec_mod's <type>_from_PyObject symbol resolves; py_vec_mod.mod
         is already in the build dir from the earlier compile).
         """
         self.add_sources(*sources)
