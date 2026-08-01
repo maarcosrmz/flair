@@ -155,6 +155,23 @@ module python_api_mod
         type(c_ptr)          :: tp_name    ! const char* -- "<module>.<name>"
     end type
 
+    ! ===== Instance layout of every generated wrapper type =====
+    ! Each wrapper class stores an opaque pointer to a heap-allocated Fortran
+    ! object of the wrapped derived type. The layout does not depend on that
+    ! type, so one shared definition serves every wrapper: the generated code
+    ! only ever c_f_pointer's `data` to its own type.
+    !
+    ! `owner` distinguishes the two ownership modes:
+    !   null     -- the instance owns `data`; tp_dealloc deallocates it.
+    !   non-null -- a view: `data` points inside the Fortran object owned by
+    !               `owner`, and the instance holds a reference on it
+    !               (NumPy's `base` pattern). tp_dealloc only drops that ref.
+    type, bind(C) :: FLAIR_object_t
+        integer(c_int8_t) :: ob_head(16)   ! opaque PyObject_HEAD
+        type(c_ptr)       :: data          ! -> heap-allocated Fortran object
+        type(c_ptr)       :: owner         ! non-null: view; the owning PyObject
+    end type
+
     ! ===== Exception objects (exported symbols from the interpreter) =====
     type(c_ptr), bind(C, name="PyExc_TypeError")      :: PyExc_TypeError
     type(c_ptr), bind(C, name="PyExc_ValueError")     :: PyExc_ValueError

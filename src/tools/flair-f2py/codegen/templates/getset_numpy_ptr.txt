@@ -9,7 +9,7 @@
     function {get_fn}(self, closure) bind(C) result(r)
         type(c_ptr), value :: self, closure
         type(c_ptr) :: r, descr
-        type({struct}), pointer :: pt
+        type(FLAIR_object_t), pointer :: pt
         type({tname}), pointer :: p
         integer(c_ptrdiff_t), target :: dims_arr(1)
         integer(c_ptrdiff_t) :: n
@@ -22,7 +22,7 @@
         end if
 
         call c_f_pointer(self, pt)
-        call c_f_pointer(pt%{ptr_field}, p)
+        call c_f_pointer(pt%data, p)
 
         if (associated(p%{field})) then
             n = int(size(p%{field}), c_ptrdiff_t)
@@ -49,7 +49,7 @@
     function {set_fn}(self, value, closure) bind(C) result(r)
         type(c_ptr), value :: self, value, closure
         integer(c_int) :: r
-        type({struct}), pointer :: pt
+        type(FLAIR_object_t), pointer :: pt
         type({tname}), pointer :: p
         type(c_ptr) :: arr, descr, data_ptr
         integer(c_ptrdiff_t) :: n, stride_bytes, stride_elem, total_span, base_addr
@@ -66,7 +66,7 @@
         end if
 
         call c_f_pointer(self, pt)
-        call c_f_pointer(pt%{ptr_field}, p)
+        call c_f_pointer(pt%data, p)
         if (.not. associated(p%{field})) then
             call PyErr_SetString(PyExc_RuntimeError, c_loc({s_unassoc}))
             return

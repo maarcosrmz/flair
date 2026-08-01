@@ -3,7 +3,7 @@
     function {new_fn}(type_ptr, args, kwds) bind(C) result(r)
         type(c_ptr), value :: type_ptr, args, kwds
         type(c_ptr) :: r
-        type({struct}), pointer :: pt
+        type(FLAIR_object_t), pointer :: pt
         type({tname}), pointer :: p
 {new_body}
     end function
@@ -17,15 +17,15 @@
 
     subroutine {dealloc_fn}(self) bind(C)
         type(c_ptr), value :: self
-        type({struct}), pointer :: pt
+        type(FLAIR_object_t), pointer :: pt
         type({tname}), pointer :: p
 
         call c_f_pointer(self, pt)
         if (c_associated(pt%owner)) then
             ! view: storage lives inside the owner's Fortran object; drop our keep-alive ref
             call Py_DecRef(pt%owner)
-        else if (c_associated(pt%{ptr_field})) then
-            call c_f_pointer(pt%{ptr_field}, p)
+        else if (c_associated(pt%data)) then
+            call c_f_pointer(pt%data, p)
             deallocate(p)
         end if
         call PyObject_Free(self)

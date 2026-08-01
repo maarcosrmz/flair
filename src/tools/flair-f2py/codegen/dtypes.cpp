@@ -19,9 +19,6 @@ namespace codegen {
 // ===========================================================================
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wc23-extensions"
-static constexpr char tpl_struct[] = {
-#embed "templates/object_struct.txt"
-    , '\0'};
 static constexpr char tpl_lifecycle[] = {
 #embed "templates/lifecycle.txt"
     , '\0'};
@@ -51,7 +48,7 @@ static constexpr char tpl_noargs_method[] =
     "    function {fn}(self, args) bind(C) result(r)\n"
     "        type(c_ptr), value :: self, args\n"
     "        type(c_ptr) :: r\n"
-    "        type({struct}), pointer :: pt\n"
+    "        type(FLAIR_object_t), pointer :: pt\n"
     "        type({tname}), pointer :: p\n"
     "{body}\n"
     "    end function\n";
@@ -124,20 +121,13 @@ sema::SymbolVector public_fields(dtype_info_t const &dt,
   return out;
 }
 
-str_t gen_object_struct(dtype_info_t const &dt) {
-  sema::Symbol const &tsym = *dt.ptr;
-  return render(tpl_struct, {{"struct", struct_name(tsym)},
-                             {"ptr_field", ptr_field(tsym)},
-                             {"tname", tname(tsym)}});
-}
-
-static str_t default_new_body(str_t const &pf) {
+static str_t default_new_body() {
   str_t b;
   b += "        r = PyType_GenericAlloc(type_ptr, 0_c_ptrdiff_t)\n";
   b += "        if (.not. c_associated(r)) return\n";
   b += "        call c_f_pointer(r, pt)\n";
   b += "        allocate(p)   ! component default-initializers apply here\n";
-  b += fmt::format("        pt%{} = c_loc(p)\n", pf);
+  b += "        pt%data = c_loc(p)\n";
   b += "        pt%owner = c_null_ptr\n";
   return b;
 }
@@ -145,12 +135,12 @@ static str_t default_new_body(str_t const &pf) {
 // tp_new for ctor case: allocates Python wrapper but leaves the Fortran ptr
 // null. The actual Fortran object is created in tp_init by the
 // pointer-returning constructor.
-static str_t ctor_new_body(str_t const &pf) {
+static str_t ctor_new_body() {
   str_t b;
   b += "        r = PyType_GenericAlloc(type_ptr, 0_c_ptrdiff_t)\n";
   b += "        if (.not. c_associated(r)) return\n";
   b += "        call c_f_pointer(r, pt)\n";
-  b += fmt::format("        pt%{} = c_null_ptr\n", pf);
+  b += "        pt%data = c_null_ptr\n";
   b += "        pt%owner = c_null_ptr\n";
   return b;
 }
@@ -171,8 +161,8 @@ static str_t arg_check_decls(std::vector<sema::Symbol const *> const &accepted,
     str_t const nm = s->name().ToString();
     if (auto const c = classify_dtype(*s->GetType(), m);
         c.cls == dtype_class::Local) {
-      d += fmt::format("        type({}), pointer :: kwpt_{}\n",
-                       struct_name(*c.sym), nm);
+      d += fmt::format("        type({}), pointer :: kwpt_{}\n", obj_struct,
+                       nm);
       d += fmt::format("        type({}), pointer :: kw_{}\n", tname(*c.sym),
                        nm);
     } else if (c.cls == dtype_class::Foreign) {
@@ -302,8 +292,8 @@ static str_t arg_check_stmts(std::vector<sema::Symbol const *> const &accepted,
       b += "                    return\n";
       b += "                end if\n";
       b += fmt::format("                call c_f_pointer(arg, kwpt_{})\n", nm);
-      b += fmt::format("                call c_f_pointer(kwpt_{}%{}, kw_{})\n",
-                       nm, ptr_field(*c.sym), nm);
+      b += fmt::format("                call c_f_pointer(kwpt_{}%data, kw_{})\n",
+                       nm, nm);
     } else if (c.cls == dtype_class::Foreign) {
       // The external converter isinstance-checks and sets the exception; a
       // disassociated result signals failure.
@@ -447,7 +437,7 @@ static str_t ctor_init_body(dtype_info_t const &dt, module_info_t const &m,
   str_t const pyname = tname(tsym);
 
   str_t b;
-  b += fmt::format("        type({}), pointer :: pt\n", struct_name(tsym));
+  b += "        type(FLAIR_object_t), pointer :: pt\n";
   b += fmt::format("        type({}), pointer :: p\n", tname(tsym));
   b += arg_check_decls(accepted, m);
   b += "\n";
@@ -469,7 +459,7 @@ static str_t ctor_init_body(dtype_info_t const &dt, module_info_t const &m,
     b += "        allocate(p)\n";
     b += fmt::format("        p = {}({})\n", tname(tsym), ctor_args);
   }
-  b += fmt::format("        pt%{} = c_loc(p)\n", ptr_field(tsym));
+  b += "        pt%data = c_loc(p)\n";
   return b;
 }
 
@@ -506,13 +496,13 @@ static str_t init_init_body(sema::Symbol const &tsym, fnt_info_t const &init_fi,
   str_t const pyname = tname(tsym);
 
   str_t b;
-  b += fmt::format("        type({}), pointer :: pt\n", struct_name(tsym));
+  b += "        type(FLAIR_object_t), pointer :: pt\n";
   b += fmt::format("        type({}), pointer :: p\n", tname(tsym));
   b += arg_check_decls(accepted, m);
   b += "\n";
 
   b += "        call c_f_pointer(self, pt)\n";
-  b += fmt::format("        call c_f_pointer(pt%{}, p)\n\n", ptr_field(tsym));
+  b += "        call c_f_pointer(pt%data, p)\n\n";
 
   b += arg_check_stmts(accepted, m, pyname, strings);
 
@@ -534,24 +524,21 @@ str_t gen_lifecycle(dtype_info_t const &dt, module_info_t const &m,
                     string_pool_t &strings, ext_types_t &ext_types) {
   sema::Symbol const &tsym = *dt.ptr;
   str_t const tn = tname(tsym);
-  str_t const pf = ptr_field(tsym);
 
   str_t new_body, init_body;
   if (dt.ctor.ptr != nullptr) {
-    new_body = ctor_new_body(pf);
+    new_body = ctor_new_body();
     init_body = ctor_init_body(dt, m, strings, ext_types);
   } else if (dt.init.ptr != nullptr) {
-    new_body = default_new_body(pf);
+    new_body = default_new_body();
     init_body = init_init_body(tsym, dt.init, m, strings, ext_types);
   } else {
-    new_body = default_new_body(pf);
+    new_body = default_new_body();
     init_body = "";
   }
 
   return render(tpl_lifecycle, {
                                    {"tname", tn},
-                                   {"struct", struct_name(tsym)},
-                                   {"ptr_field", pf},
                                    // tp_-prefixed so a type-bound procedure
                                    // named init/new/dealloc cannot collide
                                    {"new_fn", "py_" + tn + "_tp_new"},
@@ -610,13 +597,12 @@ str_t gen_method(dtype_info_t const &dt, sema::Symbol const &binding,
 
   str_t body = decls;
   body += "        call c_f_pointer(self, pt)\n";
-  body += fmt::format("        call c_f_pointer(pt%{}, p)\n", ptr_field(tsym));
+  body += "        call c_f_pointer(pt%data, p)\n";
   body += fetch;
   body += build_result(rt, fmt::format("p%{}({})", pyname, call_args));
   body += cleanup;
   return render(args.empty() ? tpl_noargs_method : tpl_method,
                 {{"fn", wrapper},
-                 {"struct", struct_name(tsym)},
                  {"tname", tn},
                  {"body", body}}) +
          "\n";
@@ -650,13 +636,9 @@ str_t gen_getset(dtype_info_t const &dt, sema::Symbol const &comp,
     return render(tpl_getset_dtype,
                   {{"get_fn", getter},
                    {"set_fn", setter},
-                   {"struct", struct_name(tsym)},
                    {"tname", tn},
-                   {"ptr_field", ptr_field(tsym)},
                    {"field", field},
-                   {"sub_struct", struct_name(*c.sym)},
                    {"sub_tname", stn},
-                   {"sub_ptr_field", ptr_field(*c.sym)},
                    {"type_obj", "py_" + stn + "_type_obj"},
                    {"s_del", s_del},
                    {"s_type", strings.intern(field + " must be a " +
@@ -668,9 +650,7 @@ str_t gen_getset(dtype_info_t const &dt, sema::Symbol const &comp,
     str_t const stn = tname(*c.sym);
     return render(tpl_getset_dtype_ext, {{"get_fn", getter},
                                          {"set_fn", setter},
-                                         {"struct", struct_name(tsym)},
                                          {"tname", tn},
-                                         {"ptr_field", ptr_field(tsym)},
                                          {"field", field},
                                          {"sub_tname", stn},
                                          {"view_fn", view_pyobject_fn(stn)},
@@ -685,9 +665,7 @@ str_t gen_getset(dtype_info_t const &dt, sema::Symbol const &comp,
                  tpl_getset_numpy_ptr,
                  {{"get_fn", getter},
                   {"set_fn", setter},
-                  {"struct", struct_name(tsym)},
                   {"tname", tn},
-                  {"ptr_field", ptr_field(tsym)},
                   {"field", field},
                   {"npy", npy(*t)},
                   {"raw_type", ftype(*t)},
@@ -701,9 +679,7 @@ str_t gen_getset(dtype_info_t const &dt, sema::Symbol const &comp,
     return render(tpl_getset_numpy,
                   {{"get_fn", getter},
                    {"set_fn", setter},
-                   {"struct", struct_name(tsym)},
                    {"tname", tn},
-                   {"ptr_field", ptr_field(tsym)},
                    {"field", field},
                    {"npy", npy(*t)},
                    {"raw_type", ftype(*t)},
@@ -727,9 +703,7 @@ str_t gen_getset(dtype_info_t const &dt, sema::Symbol const &comp,
   }
   return render(tpl_getset_scalar, {{"get_fn", getter},
                                     {"set_fn", setter},
-                                    {"struct", struct_name(tsym)},
                                     {"tname", tn},
-                                    {"ptr_field", ptr_field(tsym)},
                                     {"field", field},
                                     {"to_py_field", to_py(*t, "p%" + field)},
                                     {"ctype", py_ctype(*t)},
@@ -766,8 +740,8 @@ str_t spec_fills(str_t const &tn, str_t const &cls, str_t const &pyqual,
   str_t s = fmt::format("        ! --- {} spec ---\n", tn);
   s += fmt::format("        {0}%name      = c_loc({1})\n", sp,
                    strings.intern(pyqual + "." + cls));
-  s += fmt::format("        {0}%basicsize = int(c_sizeof(dummy_{1}), c_int)\n",
-                   sp, tn);
+  s += fmt::format("        {0}%basicsize = int(c_sizeof(dummy_obj), c_int)\n",
+                   sp);
   s += fmt::format("        {0}%itemsize  = 0\n", sp);
   s += fmt::format("        {0}%flags     = Py_TPFLAGS_DEFAULT\n", sp);
   s += fmt::format("        {0}%pad       = 0\n", sp);

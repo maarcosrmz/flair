@@ -46,8 +46,11 @@ str_t tname(
     Fortran::semantics::Symbol const &s); // folded lowercase, e.g. "point"
 str_t clsname(
     Fortran::semantics::Symbol const &s); // Python class name, e.g. "Point"
-str_t struct_name(Fortran::semantics::Symbol const &s); // "py_<t>_object_t"
-str_t ptr_field(Fortran::semantics::Symbol const &s);   // "<t>_ptr"
+
+// Instance layout shared by every wrapper class, defined by the runtime: the
+// wrapped object hangs off `data`, so nothing here depends on the type.
+inline constexpr char obj_struct[] = "FLAIR_object_t";
+inline constexpr char obj_data[] = "data";
 
 // PyInit table-fill rows.
 str_t method_row(str_t const &tbl, int idx, str_t const &name_var,

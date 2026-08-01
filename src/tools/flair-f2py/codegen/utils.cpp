@@ -72,11 +72,6 @@ str_t clsname(semantics::Symbol const &s) {
   return n;
 }
 
-str_t struct_name(semantics::Symbol const &s) {
-  return "py_" + tname(s) + "_object_t";
-}
-str_t ptr_field(semantics::Symbol const &s) { return tname(s) + "_ptr"; }
-
 str_t method_row(str_t const &tbl, int idx, str_t const &name_var,
                  str_t const &wrapper, str_t const &flags) {
   return fmt::format(

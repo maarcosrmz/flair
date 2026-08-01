@@ -172,7 +172,7 @@ str_t gen_module_vars(module_info_t const &m, string_pool_t &strings,
     case var_kind::DerivedLocal: {
       str_t const tn = tname(*p.tsym);
       init_decls += fmt::format("        type({}), pointer :: flr_v_{}\n",
-                                struct_name(*p.tsym), nm);
+                                obj_struct, nm);
       create += fmt::format(
           "        flr_attr = PyType_GenericAlloc(py_{}_type_obj, "
           "0_c_ptrdiff_t)\n",
@@ -183,8 +183,8 @@ str_t gen_module_vars(module_info_t const &m, string_pool_t &strings,
       create += fmt::format("            call c_f_pointer(flr_attr, "
                             "flr_v_{})\n",
                             nm);
-      create += fmt::format("            flr_v_{}%{} = flr_loc_{}({})\n", nm,
-                            ptr_field(*p.tsym), nm, nm);
+      create += fmt::format("            flr_v_{}%data = flr_loc_{}({})\n", nm,
+                            nm, nm);
       create += fmt::format("            flr_v_{}%owner = mod_ptr\n", nm);
       create += "            call Py_IncRef(mod_ptr)\n";
       create += fmt::format("            rc = PyModule_AddObjectRef(mod_ptr, "

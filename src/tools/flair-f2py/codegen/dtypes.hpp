@@ -16,7 +16,6 @@ sema::SymbolVector public_fields(dtype_info_t const &dt,
                                  module_info_t const &m);
 
 // `type, bind(C) :: py_<t>_object_t` instance layout.
-str_t gen_object_struct(dtype_info_t const &dt);
 
 // Resolve the ctor generic's specific and collect its dummies as __init__
 // kwargs into `out`. False if the ctor cannot be wrapped faithfully: not

@@ -232,8 +232,8 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
         str_t const s_argtype =
             strings.intern("argument '" + d->name().ToString() +
                            "' must be a " + clsname(*c.sym) + " instance");
-        decls += fmt::format("        type({}), pointer :: pt{}\n",
-                             struct_name(*c.sym), i);
+        decls += fmt::format("        type({}), pointer :: pt{}\n", obj_struct,
+                             i);
         decls += fmt::format("        type({}), pointer :: {}\n", tname(*c.sym),
                              val);
         bfetch += fmt::format("        if (PyObject_IsInstance({}, "
@@ -251,8 +251,8 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
                               "if\n",
                               fail_return);
         bfetch += fmt::format("        call c_f_pointer({}, pt{})\n", obj, i);
-        bfetch += fmt::format("        call c_f_pointer(pt{}%{}, {})\n", i,
-                              ptr_field(*c.sym), val);
+        bfetch +=
+            fmt::format("        call c_f_pointer(pt{}%data, {})\n", i, val);
       } else if (c.cls == dtype_class::Foreign && ext_types != nullptr &&
                  note_ext_type(*ext_types, *c.sym)) {
         // Unwrap via the external converter emitted by the file that wraps the

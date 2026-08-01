@@ -94,8 +94,13 @@ str_t codegen_module(module_info_t const &m_in, bool internal_init) {
     }
   }
 
-  str_t structs, procedures, table_decls, pyinit_decls, pyinit_fills,
-      pyinit_creates;
+  str_t procedures, table_decls, pyinit_decls, pyinit_fills, pyinit_creates;
+
+  // Every wrapper instance has the same layout, so one dummy of the shared
+  // runtime type supplies the basicsize for every type spec.
+  if (!m.derived_types.empty())
+    pyinit_decls +=
+        fmt::format("        type({}) :: dummy_obj\n", obj_struct);
 
   // ---- derived types -------------------------------------------------------
   // Two passes over the types: the first generates the procedures and
@@ -109,8 +114,6 @@ str_t codegen_module(module_info_t const &m_in, bool internal_init) {
     if (dt.ptr == nullptr)
       continue;
     str_t const tn = tname(*dt.ptr);
-
-    structs += gen_object_struct(dt);
 
     sema::SymbolVector fields = public_fields(dt, m);
     procedures += gen_lifecycle(dt, m, strings, ext_types) + "\n";
@@ -162,8 +165,6 @@ str_t codegen_module(module_info_t const &m_in, bool internal_init) {
     table_decls += fmt::format(
         "    type(c_ptr), save :: py_{}_type_obj = c_null_ptr\n", tn);
 
-    pyinit_decls +=
-        fmt::format("        type({}) :: dummy_{}\n", struct_name(tsym), tn);
     pyinit_fills +=
         fmt::format("        ! --- {} method table ---\n", tn) + method_fills;
     pyinit_fills +=
@@ -327,7 +328,7 @@ str_t codegen_module(module_info_t const &m_in, bool internal_init) {
       converters += "        type(c_ptr), value :: p\n";
       converters += fmt::format("        type({}), pointer :: r\n", tn);
       converters +=
-          fmt::format("        type({}), pointer :: obj\n", struct_name(tsym));
+          fmt::format("        type({}), pointer :: obj\n", obj_struct);
       converters += "        r => null()\n";
       converters += guard;
       converters += fmt::format(
@@ -345,7 +346,7 @@ str_t codegen_module(module_info_t const &m_in, bool internal_init) {
       converters += "        end if\n";
       converters += "        call c_f_pointer(p, obj)\n";
       converters +=
-          fmt::format("        call c_f_pointer(obj%{}, r)\n", ptr_field(tsym));
+          str_t("        call c_f_pointer(obj%data, r)\n");
       converters += "    end function\n\n";
 
       converters += fmt::format("    function {}(data, owner) result(r)\n",
@@ -353,7 +354,7 @@ str_t codegen_module(module_info_t const &m_in, bool internal_init) {
       converters += "        type(c_ptr), value :: data, owner\n";
       converters += "        type(c_ptr) :: r\n";
       converters +=
-          fmt::format("        type({}), pointer :: obj\n", struct_name(tsym));
+          fmt::format("        type({}), pointer :: obj\n", obj_struct);
       converters += "        r = c_null_ptr\n";
       converters += guard;
       converters += fmt::format(
@@ -361,7 +362,7 @@ str_t codegen_module(module_info_t const &m_in, bool internal_init) {
           tn);
       converters += "        if (.not. c_associated(r)) return\n";
       converters += "        call c_f_pointer(r, obj)\n";
-      converters += fmt::format("        obj%{} = data\n", ptr_field(tsym));
+      converters += "        obj%data = data\n";
       converters += "        obj%owner = owner\n";
       converters += "        call Py_IncRef(owner)\n";
       converters += "    end function\n\n";
@@ -376,7 +377,6 @@ str_t codegen_module(module_info_t const &m_in, bool internal_init) {
                                 {"modpy", modpy},
                                 {"wrapped_module", m.name},
                                 {"imports", imports},
-                                {"structs", structs},
                                 {"cstrings", strings.decls()},
                                 {"tables", table_decls},
                                 {"procedures", procedures},
