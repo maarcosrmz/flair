@@ -12,7 +12,6 @@
         type(c_ptr), value :: self, args, kwds
         integer(c_int) :: r
 {init_body}
-        r = 0
     end function
 
     subroutine {dealloc_fn}(self) bind(C)

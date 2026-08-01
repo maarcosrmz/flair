@@ -93,6 +93,9 @@ bool parse_args(std::vector<Fortran::semantics::Symbol *> const &dummies,
                 ext_types_t *ext_types = nullptr,
                 poly_overrides_t const *overrides = nullptr);
 
+// Shift every non-empty line of `s` right by one indentation level.
+str_t indent_lines(str_t const &s);
+
 // Assemble a wrapper body from the parse_args streams plus the call and its
 // cleanup. Argument binding and the call run inside a named block so every
 // failure path shares one cleanup: `r` is preset to `fail_value` and each

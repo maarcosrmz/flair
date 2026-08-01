@@ -213,25 +213,17 @@ static str_t arg_check_decls(std::vector<sema::Symbol const *> const &accepted,
 
 // Argument validation shared by the two tp_init bodies: a guard rejecting
 // positional args, the runtime binding of the accepted keywords, and the
-// per-keyword conversion. Any failure sets r = -1 and returns early; success
-// falls through to the template's trailing r = 0.
+// per-keyword conversion. Every failure `exit init`s, leaving r at the -1 the
+// caller preset; success falls through to the trailing r = 0 inside the block.
 static str_t arg_check_stmts(std::vector<sema::Symbol const *> const &accepted,
                              module_info_t const &m, str_t const &pyname,
                              string_pool_t &strings) {
   str_t b;
 
   // Reject positional arguments: tp_init is keyword-only here.
-  str_t const s_pos =
-      strings.intern(pyname + "() takes no positional arguments");
-  b += "        if (c_associated(args)) then\n";
-  b += "            if (PyTuple_Size(args) > 0_c_ptrdiff_t) then\n";
   b += fmt::format(
-      "                call PyErr_SetString(PyExc_TypeError, c_loc({}))\n",
-      s_pos);
-  b += "                r = -1\n";
-  b += "                return\n";
-  b += "            end if\n";
-  b += "        end if\n\n";
+      "        if (.not. FLAIR_no_positional(args, c_loc({}))) exit init\n",
+      strings.intern(pyname + "() takes no positional arguments"));
 
   // Bind the keywords through the same runtime entry point the module
   // functions use; passing a null argument tuple keeps this keyword-only.
@@ -246,10 +238,7 @@ static str_t arg_check_stmts(std::vector<sema::Symbol const *> const &accepted,
   b += array_assign("        ", "argnames", names);
   b += array_assign("        ", "argreq", reqs);
   b += "        if (.not. FLAIR_parse_args(c_null_ptr, kwds, argnames, "
-       "argreq, objs)) then\n";
-  b += "            r = -1\n";
-  b += "            return\n";
-  b += "        end if\n\n";
+       "argreq, objs)) exit init\n";
 
   int idx = 0;
   for (sema::Symbol const *s : accepted) {
@@ -261,20 +250,14 @@ static str_t arg_check_stmts(std::vector<sema::Symbol const *> const &accepted,
                        "c_loc({}), c_loc({}))\n",
                        obj, tname(*c.sym), strings.intern(nm),
                        strings.intern(clsname(*c.sym)));
-      b += "        if (.not. c_associated(kw_raw)) then\n";
-      b += "            r = -1\n";
-      b += "            return\n";
-      b += "        end if\n";
+      b += "        if (.not. c_associated(kw_raw)) exit init\n";
       b += fmt::format("        call c_f_pointer(kw_raw, kw_{})\n", nm);
     } else if (c.cls == dtype_class::Foreign) {
       // The external converter isinstance-checks and sets the exception; a
       // disassociated result signals failure.
       b += fmt::format("        kw_{} => {}({})\n", nm,
                        from_pyobject_fn(tname(*c.sym)), obj);
-      b += fmt::format("        if (.not. associated(kw_{})) then\n", nm);
-      b += "            r = -1\n";
-      b += "            return\n";
-      b += "        end if\n";
+      b += fmt::format("        if (.not. associated(kw_{})) exit init\n", nm);
     } else {
       // Checked conversion into the shared scratch; on failure the helper
       // leaves the Python exception pending.
@@ -299,19 +282,14 @@ static str_t arg_check_stmts(std::vector<sema::Symbol const *> const &accepted,
       }
       b += fmt::format("        {} = {}({}, kw_ok)\n", scratch, py_helper(*t),
                        obj);
-      b += "        if (.not. kw_ok) then\n";
-      b += "            r = -1\n";
-      b += "            return\n";
-      b += "        end if\n";
+      b += "        if (.not. kw_ok) exit init\n";
       if (auto const cl = flu::char_len(*t)) {
         // kw_<nm> is character(N): reject longer strings instead of letting
         // the assignment truncate; shorter ones blank-pad.
         b += fmt::format(
-            "        if (.not. FLAIR_check_len(kw_vc, {}, c_loc({}))) then\n",
+            "        if (.not. FLAIR_check_len(kw_vc, {}, c_loc({}))) exit "
+            "init\n",
             *cl, strings.intern(nm));
-        b += "            r = -1\n";
-        b += "            return\n";
-        b += "        end if\n";
       }
       b += fmt::format("        kw_{} = {}\n", nm, narrow(*t, scratch));
     }
@@ -393,8 +371,10 @@ static str_t ctor_init_body(dtype_info_t const &dt, module_info_t const &m,
   b += "\n";
 
   b += "        call c_f_pointer(self, pt)\n\n";
+  b += "        r = -1\n";
+  b += "        init: block\n";
 
-  b += arg_check_stmts(accepted, m, pyname, strings);
+  str_t body = arg_check_stmts(accepted, m, pyname, strings);
 
   str_t ctor_args;
   for (sema::Symbol const *f : accepted) {
@@ -404,12 +384,15 @@ static str_t ctor_init_body(dtype_info_t const &dt, module_info_t const &m,
     ctor_args += nm + "=kw_" + nm;
   }
   if (ptr_result) {
-    b += fmt::format("        p => {}({})\n", tname(tsym), ctor_args);
+    body += fmt::format("        p => {}({})\n", tname(tsym), ctor_args);
   } else {
-    b += "        allocate(p)\n";
-    b += fmt::format("        p = {}({})\n", tname(tsym), ctor_args);
+    body += "        allocate(p)\n";
+    body += fmt::format("        p = {}({})\n", tname(tsym), ctor_args);
   }
-  b += "        pt%data = c_loc(p)\n";
+  body += "        pt%data = c_loc(p)\n";
+  body += "        r = 0\n";
+  b += indent_lines(body);
+  b += "        end block init\n";
   return b;
 }
 
@@ -453,8 +436,10 @@ static str_t init_init_body(sema::Symbol const &tsym, fnt_info_t const &init_fi,
 
   b += "        call c_f_pointer(self, pt)\n";
   b += "        call c_f_pointer(pt%data, p)\n\n";
+  b += "        r = -1\n";
+  b += "        init: block\n";
 
-  b += arg_check_stmts(accepted, m, pyname, strings);
+  str_t body = arg_check_stmts(accepted, m, pyname, strings);
 
   str_t call_args;
   for (sema::Symbol const *d : accepted) {
@@ -464,9 +449,12 @@ static str_t init_init_body(sema::Symbol const &tsym, fnt_info_t const &init_fi,
     call_args += nm + "=kw_" + nm;
   }
   str_t const init_name = init_fi.ptr->name().ToString();
-  b += call_args.empty()
-           ? fmt::format("        call {}(p)\n", init_name)
-           : fmt::format("        call {}(p, {})\n", init_name, call_args);
+  body += call_args.empty()
+              ? fmt::format("        call {}(p)\n", init_name)
+              : fmt::format("        call {}(p, {})\n", init_name, call_args);
+  body += "        r = 0\n";
+  b += indent_lines(body);
+  b += "        end block init\n";
   return b;
 }
 
@@ -483,8 +471,9 @@ str_t gen_lifecycle(dtype_info_t const &dt, module_info_t const &m,
     new_body = default_new_body();
     init_body = init_init_body(tsym, dt.init, m, strings, ext_types);
   } else {
+    // No constructor and no initializer: __init__ is a no-op that succeeds.
     new_body = default_new_body();
-    init_body = "";
+    init_body = "        r = 0\n";
   }
 
   return render(tpl_lifecycle, {

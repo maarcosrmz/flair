@@ -369,7 +369,7 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
 }
 
 // Shift every non-empty line right by one level.
-static str_t indent_lines(str_t const &s) {
+str_t indent_lines(str_t const &s) {
   str_t out;
   size_t pos = 0;
   while (pos < s.size()) {

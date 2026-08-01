@@ -1061,6 +1061,17 @@ contains
         end if
     end function
 
+    ! A generated __init__ is keyword-only, so any positional argument is an
+    ! error. Reports it and returns .false.
+    function FLAIR_no_positional(args, msg) result(ok)
+        type(c_ptr), value :: args, msg
+        logical :: ok
+        ok = .true.
+        if (.not. c_associated(args)) return
+        ok = PyTuple_Size(args) == 0_c_ptrdiff_t
+        if (.not. ok) call PyErr_SetString(PyExc_TypeError, msg)
+    end function
+
     ! Reject a string too long for an explicit-length character dummy, which
     ! would otherwise be truncated silently by the assignment.
     function FLAIR_check_len(s, maxlen, name) result(ok)
