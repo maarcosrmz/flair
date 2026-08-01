@@ -1121,22 +1121,32 @@ contains
         p = FLAIR_unwrap(obj, type_obj, msg)
     end function
 
-    ! Body of a generated <t>_view_PyObject converter: a new instance aliasing
-    ! `data`, which lives inside the Fortran object owned by `owner`. The view
-    ! holds a reference on the owner for as long as it lives, so the storage it
-    ! points into cannot be freed underneath it (NumPy's `base` pattern).
-    function FLAIR_new_view(type_obj, data, owner, noinit_msg) result(r)
-        type(c_ptr), value :: type_obj, data, owner, noinit_msg
+    ! A new instance aliasing `data`, which lives inside the Fortran object
+    ! owned by `owner`. The view holds a reference on the owner for as long as
+    ! it lives, so the storage it points into cannot be freed underneath it
+    ! (NumPy's `base` pattern). For a getter reaching a type of its own module,
+    ! which is necessarily initialised by then.
+    function FLAIR_new_view(type_obj, data, owner) result(r)
+        type(c_ptr), value :: type_obj, data, owner
         type(c_ptr) :: r
         type(FLAIR_object_t), pointer :: o
-        r = c_null_ptr
-        if (.not. FLAIR_type_ready(type_obj, noinit_msg)) return
         r = PyType_GenericAlloc(type_obj, 0_c_ptrdiff_t)
         if (.not. c_associated(r)) return
         call c_f_pointer(r, o)
         o%data = data
         o%owner = owner
         call Py_IncRef(owner)
+    end function
+
+    ! Body of a generated <t>_view_PyObject converter: as FLAIR_new_view, but
+    ! reached from another module's wrapper, which may not have imported this
+    ! one yet.
+    function FLAIR_new_view_checked(type_obj, data, owner, noinit_msg) result(r)
+        type(c_ptr), value :: type_obj, data, owner, noinit_msg
+        type(c_ptr) :: r
+        r = c_null_ptr
+        if (.not. FLAIR_type_ready(type_obj, noinit_msg)) return
+        r = FLAIR_new_view(type_obj, data, owner)
     end function
 
     ! The type-independent half of tp_dealloc. For a view, drops the keep-alive
@@ -1310,6 +1320,30 @@ contains
         do k = 1_c_int, rank
             dims(k) = PyArray_DIM(arr, k - 1_c_int)
         end do
+    end function
+
+    ! A fresh NumPy-owned array of the given dtype and shape, plus the address
+    ! of its buffer so the caller can fill it. NPY_ARRAY_OWNDATA means NumPy
+    ! allocated and will free the buffer, so the result is independent of any
+    ! Fortran storage -- no base object and no aliasing.
+    ! c_null_ptr with the exception pending on failure.
+    function FLAIR_array_new(npy_type, rank, dims, data) result(r)
+        integer(c_int), value :: npy_type, rank
+        integer(c_ptrdiff_t), intent(in), target :: dims(*)
+        type(c_ptr), intent(out) :: data
+        type(c_ptr) :: r
+        r = c_null_ptr
+        data = c_null_ptr
+        if (.not. c_associated(numpy_api_ptr)) then
+            call PyErr_SetString(PyExc_RuntimeError, c_loc(s_numpy_req))
+            return
+        end if
+        r = PyArray_NewFromDescr(PyArray_Type_ptr, &
+                PyArray_DescrFromType(npy_type), rank, c_loc(dims), &
+                c_null_ptr, c_null_ptr, &
+                NPY_ARRAY_BEHAVED + NPY_ARRAY_OWNDATA, c_null_ptr)
+        if (.not. c_associated(r)) return
+        data = PyArray_DATA(r)
     end function
 
     ! Flush any writeback copy and drop the reference. Safe on c_null_ptr, so

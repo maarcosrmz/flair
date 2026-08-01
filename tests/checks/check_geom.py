@@ -118,12 +118,16 @@ pv.modes = np.array([1j, 2, 3 - 1j], dtype=np.complex128)
 check("complex array field round-trip",
       np.array_equal(pv.modes, [1j, 2, 3 - 1j]))
 check("complex array field dtype", pv.modes.dtype == np.complex128)
-# negative-stride source: exercises the byte->element stride math (16-byte
-# elements) in the setter
+# non-contiguous sources: the setter coerces to a contiguous array, so a
+# reversed or stepped view must land in the right order
 rev = np.array([1 + 1j, 2 + 2j, 3 + 3j], dtype=np.complex128)[::-1]
 pv.modes = rev
 check("complex array field reversed stride",
       np.array_equal(pv.modes, [3 + 3j, 2 + 2j, 1 + 1j]))
+step = np.array([1j, 9j, 2j, 9j, 3j], dtype=np.complex128)[::2]
+pv.modes = step
+check("complex array field stepped stride",
+      np.array_equal(pv.modes, [1j, 2j, 3j]))
 
 # --- ctor kwarg type error ---
 try:

@@ -1,56 +1,37 @@
     ! ===== {field} property -- NumPy array copy of p%{field} (rank 1) =====
 
-    ! getter: returns a freshly-allocated, NumPy-owned copy of p%{field}.
-    ! NumPy allocates and owns the buffer (NPY_ARRAY_OWNDATA), so the returned
-    ! array is fully independent of the Fortran instance -- no base object, no
-    ! aliasing, and no contiguity assumptions about the source. The copy is taken
-    ! via Fortran array assignment into the contiguous NumPy buffer.
+    ! getter: a freshly-allocated, NumPy-owned copy of p%{field}, so the result
+    ! is fully independent of the Fortran instance -- no base object and no
+    ! aliasing. The copy goes through Fortran array assignment into the
+    ! contiguous NumPy buffer, which assumes nothing about the source layout.
     function {get_fn}(self, closure) bind(C) result(r)
         type(c_ptr), value :: self, closure
-        type(c_ptr) :: r, descr
-        type(FLAIR_object_t), pointer :: pt
+        type(c_ptr) :: r, buf
         type({tname}), pointer :: p
-        integer(c_ptrdiff_t), target :: dims_arr(1)
-        integer(c_ptrdiff_t) :: n
+        integer(c_ptrdiff_t) :: dims(1)
         {raw_type}, pointer :: raw(:)
 
-        r = c_null_ptr
-        if (.not. c_associated(numpy_api_ptr)) then
-            call PyErr_SetString(PyExc_RuntimeError, c_loc(s_numpy_req))
-            return
-        end if
+        call c_f_pointer(FLAIR_data_ptr(self), p)
+        dims(1) = 0_c_ptrdiff_t
+        if (allocated(p%{field})) dims(1) = int(size(p%{field}), c_ptrdiff_t)
 
-        call c_f_pointer(self, pt)
-        call c_f_pointer(pt%data, p)
-
-        if (allocated(p%{field})) then
-            n = int(size(p%{field}), c_ptrdiff_t)
-        else
-            n = 0_c_ptrdiff_t
-        end if
-
-        dims_arr(1) = n
-        descr = PyArray_DescrFromType({npy})
-        r = PyArray_NewFromDescr(PyArray_Type_ptr, descr, 1_c_int, &
-                c_loc(dims_arr), c_null_ptr, c_null_ptr, &
-                NPY_ARRAY_BEHAVED + NPY_ARRAY_OWNDATA, c_null_ptr)
+        r = FLAIR_array_new({npy}, 1_c_int, dims, buf)
         if (.not. c_associated(r)) return
-        if (n > 0) then
-            call c_f_pointer(PyArray_DATA(r), raw, [n])
+        if (dims(1) > 0) then
+            call c_f_pointer(buf, raw, dims)
             raw = p%{field}
         end if
     end function
 
-    ! setter: coerce to {npy} (any memory layout) and copy into a fresh allocatable.
-    ! Shape/stride/data are read with the NumPy array accessors, honouring a
-    ! (possibly negative) stride.
+    ! setter: coerce to a contiguous {npy} array and copy into a fresh
+    ! allocatable. The coercion materialises any strided or reversed input, so
+    ! what remains here is a plain whole-array assignment.
     function {set_fn}(self, value, closure) bind(C) result(r)
         type(c_ptr), value :: self, value, closure
         integer(c_int) :: r
-        type(FLAIR_object_t), pointer :: pt
         type({tname}), pointer :: p
-        type(c_ptr) :: arr, descr, data_ptr
-        integer(c_ptrdiff_t) :: n, stride_bytes, stride_elem, total_span, base_addr
+        type(c_ptr) :: arr
+        integer(c_ptrdiff_t) :: dims(1)
         {raw_type}, pointer :: raw(:)
 
         r = -1
@@ -58,36 +39,17 @@
             call PyErr_SetString(PyExc_TypeError, c_loc({s_del}))
             return
         end if
-        if (.not. c_associated(numpy_api_ptr)) then
-            call PyErr_SetString(PyExc_RuntimeError, c_loc(s_numpy_req))
-            return
-        end if
 
-        descr = PyArray_DescrFromType({npy})
-        arr = PyArray_FromAny(value, descr, 1, 1, 0, c_null_ptr)
+        arr = FLAIR_array_from_PyObject(value, {npy}, 1_c_int, .false., dims)
         if (.not. c_associated(arr)) return
 
-        n            = PyArray_DIM(arr, 0_c_int)
-        stride_bytes = PyArray_STRIDE(arr, 0_c_int)
-        stride_elem  = stride_bytes / {elem_bytes}_c_ptrdiff_t  ! signed stride in elements
-        data_ptr     = PyArray_DATA(arr)
-
-        call c_f_pointer(self, pt)
-        call c_f_pointer(pt%data, p)
+        call c_f_pointer(FLAIR_data_ptr(self), p)
         if (allocated(p%{field})) deallocate(p%{field})
-        if (n > 0) then
-            allocate(p%{field}(n))
-            total_span = 1_c_ptrdiff_t + (n - 1_c_ptrdiff_t) * abs(stride_elem)
-            if (stride_elem > 0) then
-                call c_f_pointer(data_ptr, raw, [total_span])
-                p%{field} = raw(1:total_span:stride_elem)
-            else
-                base_addr = transfer(data_ptr, 0_c_ptrdiff_t) &
-                          + (n - 1_c_ptrdiff_t) * stride_bytes
-                call c_f_pointer(transfer(base_addr, c_null_ptr), raw, [total_span])
-                p%{field} = raw(total_span:1:stride_elem)
-            end if
+        if (dims(1) > 0) then
+            allocate(p%{field}(dims(1)))
+            call c_f_pointer(PyArray_DATA(arr), raw, dims)
+            p%{field} = raw
         end if
-        call Py_DecRef(arr)
+        call FLAIR_array_release(arr)
         r = 0
     end function

@@ -326,8 +326,8 @@ str_t codegen_module(module_info_t const &m_in, bool internal_init) {
       converters += "        type(c_ptr), value :: data, owner\n";
       converters += "        type(c_ptr) :: r\n";
       converters +=
-          fmt::format("        r = FLAIR_new_view(py_{}_type_obj, data, "
-                      "owner, c_loc({}))\n",
+          fmt::format("        r = FLAIR_new_view_checked(py_{}_type_obj, "
+                      "data, owner, c_loc({}))\n",
                       tn, s_noinit);
       converters += "    end function\n\n";
     }

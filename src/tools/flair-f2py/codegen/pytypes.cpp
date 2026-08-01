@@ -41,11 +41,6 @@ str_t npy(Fortran::semantics::DeclTypeSpec const &t) {
   return "NPY_NOTYPE";
 }
 
-int elem_bytes(Fortran::semantics::DeclTypeSpec const &t) {
-  int const k = flu::kind_of(t);
-  return flu::category(t) == TypeCategory::Complex ? 2 * k : k;
-}
-
 bool intrinsic_supported(Fortran::semantics::DeclTypeSpec const &t) {
   auto cat = flu::category(t);
   if (!cat)

@@ -27,9 +27,13 @@ def test_geom(builder):
     assert "py_point_t_get_phase" in src
     assert "py_point_t_get_tags" in src
     assert "py_point_t_get_modes" in src
-    # complex(8) elements are 16 bytes in the numpy-property stride math
+    # the array property carries its dtype; layout handling is the runtime's
     assert "NPY_COMPLEX128" in src
-    assert "/ 16_c_ptrdiff_t" in src
+    assert "FLAIR_array_new(NPY_COMPLEX128, 1_c_int, dims, buf)" in src
+    assert (
+        "FLAIR_array_from_PyObject(value, NPY_COMPLEX128, 1_c_int, .false., dims)"
+        in src
+    )
 
     # keyword-only __init__: positional args rejected with TypeError
     assert "takes no positional arguments" in src

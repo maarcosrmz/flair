@@ -622,7 +622,6 @@ str_t gen_getset(dtype_info_t const &dt, sema::Symbol const &comp,
                   {"field", field},
                   {"npy", npy(*t)},
                   {"raw_type", ftype(*t)},
-                  {"elem_bytes", std::to_string(elem_bytes(*t))},
                   {"s_del", s_del},
                   {"s_unassoc",
                    strings.intern("cannot set unassociated " + field)},
@@ -636,7 +635,6 @@ str_t gen_getset(dtype_info_t const &dt, sema::Symbol const &comp,
                    {"field", field},
                    {"npy", npy(*t)},
                    {"raw_type", ftype(*t)},
-                   {"elem_bytes", std::to_string(elem_bytes(*t))},
                    {"s_del", s_del}}) +
            "\n";
   }
