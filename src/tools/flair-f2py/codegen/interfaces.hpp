@@ -15,9 +15,14 @@ namespace codegen {
 // must list only the specifics whose wrappers were actually generated. Appends
 // its module-table row to `fills` (bumps `n`). "" if there is nothing to
 // expose.
+//
+// Overload resolution is table-driven: for each argument position that
+// actually discriminates, the wrapper declares (into `table_decls`) and fills
+// (into `fills`) a table of the kinds acceptable there, which FLAIR_classify
+// probes in the runtime's canonical order.
 str_t gen_interface_wrapper(
     Fortran::semantics::Symbol const &iface,
     std::vector<Fortran::semantics::Symbol const *> const &specifics,
-    string_pool_t &strings, str_t *fills, int &n);
+    string_pool_t &strings, str_t *fills, int &n, str_t *table_decls);
 
 } // namespace codegen

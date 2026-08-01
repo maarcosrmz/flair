@@ -46,7 +46,13 @@ def test_instantiate_directive(builder):
     assert "function py_mod_area_of(self, args, kwds)" in src
     assert "py_mod_area_of__shape_t" in src
     assert "py_mod_area_of__circle_t" in src
-    assert 'c_string_eq(pytype%tp_name, "poly.Circle_t")' in src
+    s_var = re.search(r'(s_\d+) = "poly\.Circle_t"//c_null_char', src)
+    assert s_var, "expected the qualified tp_name in the string pool"
+    assert re.search(
+        rf"FLAIR_tag_t\(FLAIR_K_DERIVED, \d+, 0, 0, c_loc\({s_var.group(1)}\)\)",
+        src,
+    )
+    assert "tags = FLAIR_classify(self, py_shape_t_whoami_tags)" in src
     assert "unexpected argument type for area_of" in src
 
     # class(*) dispatches the same way

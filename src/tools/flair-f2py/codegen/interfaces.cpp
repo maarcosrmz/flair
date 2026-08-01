@@ -1,7 +1,6 @@
 #include "interfaces.hpp"
 
 #include <algorithm>
-#include <functional>
 #include <map>
 #include <utility>
 
@@ -148,7 +147,7 @@ str_t descriptor_key(std::vector<arg_tag_t> const &tags) {
 str_t gen_interface_wrapper(
     semantics::Symbol const &iface,
     std::vector<semantics::Symbol const *> const &specifics,
-    string_pool_t &strings, str_t *fills, int &n) {
+    string_pool_t &strings, str_t *fills, int &n, str_t *table_decls) {
   // ---- candidates, collapsing kind-only overloads to the widest -----------
   std::vector<cand_t> uniq;
   std::map<str_t, size_t> seen; // descriptor key -> index into uniq
@@ -209,240 +208,74 @@ str_t gen_interface_wrapper(
     auto it = code.find(k);
     return it != code.end() ? it->second : (code[k] = next_code++);
   };
-  auto code_kind = [&](arg_tag_t::kind_t k) {
-    arg_tag_t t;
-    t.kind = k;
-    return code_of(t);
+
+  // ---- one saved tag table per discriminating position ---------------------
+  // The probe order lives in FLAIR_classify; the wrapper only says which
+  // kinds may appear where, and which code each stands for.
+  auto kind_const = [](arg_tag_t::kind_t k) -> char const * {
+    switch (k) {
+    case arg_tag_t::Int:
+      return "FLAIR_K_INT";
+    case arg_tag_t::Real:
+      return "FLAIR_K_REAL";
+    case arg_tag_t::Cmplx:
+      return "FLAIR_K_CMPLX";
+    case arg_tag_t::Bool:
+      return "FLAIR_K_BOOL";
+    case arg_tag_t::Str:
+      return "FLAIR_K_STR";
+    case arg_tag_t::Derived:
+      return "FLAIR_K_DERIVED";
+    case arg_tag_t::Array:
+      return "FLAIR_K_ARRAY";
+    }
+    return "0";
   };
 
-  bool any_derived = false, any_array = false, any_int = false,
-       any_real = false, any_cmplx = false, any_str = false;
-  for (size_t p : disc)
-    for (auto const &c : uniq)
-      switch (c.tags[p].kind) {
-      case arg_tag_t::Derived:
-        any_derived = true;
-        break;
-      case arg_tag_t::Array:
-        any_array = true;
-        break;
-      case arg_tag_t::Int:
-        any_int = true;
-        break;
-      case arg_tag_t::Real:
-        any_real = true;
-        break;
-      case arg_tag_t::Cmplx:
-        any_cmplx = true;
-        break;
-      case arg_tag_t::Str:
-        any_str = true;
-        break;
-      case arg_tag_t::Bool: // identity test against the singletons; no locals
-        break;
-      }
-
-  // ---- declarations -------------------------------------------------------
   str_t decls;
   decls += "        integer(c_ptrdiff_t) :: nargs\n";
-  for (size_t p : disc) {
-    decls += fmt::format("        type(c_ptr) :: a{}\n", p);
+  for (size_t p : disc)
     decls += fmt::format("        integer :: tag{}\n", p);
-  }
-  if (any_derived || any_array || any_str)
-    decls += "        type(PyObject_t), pointer :: pyobj\n";
-  if (any_derived || any_str)
-    decls += "        type(PyTypeObject_t), pointer :: pytype\n";
-  if (any_int)
-    decls += "        integer(c_long_long) :: val_i\n";
-  if (any_real)
-    decls += "        real(c_double) :: val_r\n";
-  if (any_cmplx)
-    decls += "        complex(c_double_complex) :: val_z\n";
-  if (any_int || any_real || any_cmplx)
-    decls += "        logical :: ok\n";
-  if (any_array) {
-    decls += "        integer(c_int) :: nd\n";
-    decls += "        type(c_ptr) :: dsc\n";
-  }
   str_t const s_err = strings.intern("unexpected argument type for " + pyname);
 
-  // ---- classify each discriminating position into tag<p> -------------------
   str_t cls;
   cls += "        nargs = PyTuple_Size(args)\n";
   for (size_t p : disc) {
-    // present tags at this position
-    bool d = false, a = false, ii = false, rr = false, zz = false, bb = false,
-         ss = false;
-    std::vector<arg_tag_t const *> derived_tags, array_tags;
-    auto push_uniq = [](std::vector<arg_tag_t const *> &v, arg_tag_t const &t) {
-      for (arg_tag_t const *e : v)
-        if (tag_key(*e) == tag_key(t))
-          return;
-      v.push_back(&t);
-    };
+    // Distinct tags at this position, in candidate order.
+    std::vector<arg_tag_t const *> here;
     for (auto const &c : uniq) {
       arg_tag_t const &t = c.tags[p];
-      switch (t.kind) {
-      case arg_tag_t::Derived:
-        push_uniq(derived_tags, t);
-        d = true;
-        break;
-      case arg_tag_t::Array:
-        push_uniq(array_tags, t);
-        a = true;
-        break;
-      case arg_tag_t::Int:
-        ii = true;
-        break;
-      case arg_tag_t::Real:
-        rr = true;
-        break;
-      case arg_tag_t::Cmplx:
-        zz = true;
-        break;
-      case arg_tag_t::Bool:
-        bb = true;
-        break;
-      case arg_tag_t::Str:
-        ss = true;
-        break;
+      bool dup = false;
+      for (arg_tag_t const *e : here)
+        if (tag_key(*e) == tag_key(t))
+          dup = true;
+      if (!dup)
+        here.push_back(&t);
+    }
+    str_t const tbl = fmt::format("{}_tags{}", wrapper, p);
+    if (table_decls != nullptr)
+      *table_decls +=
+          fmt::format("    type(FLAIR_tag_t), save :: {}({})\n", tbl,
+                      here.size());
+    if (fills != nullptr) {
+      *fills += fmt::format("        ! --- {} dispatch tags, argument {} ---\n",
+                            pyname, p);
+      for (size_t k = 0; k < here.size(); ++k) {
+        arg_tag_t const &t = *here[k];
+        *fills += fmt::format(
+            "        {}({}) = FLAIR_tag_t({}, {}, {}, {}, {})\n", tbl, k + 1,
+            kind_const(t.kind), code_of(t), t.rank,
+            t.kind == arg_tag_t::Array ? t.npy : str_t("0"),
+            t.kind == arg_tag_t::Derived
+                ? fmt::format("c_loc({})", strings.intern(t.derived))
+                : str_t("c_null_ptr"));
       }
     }
-
-    cls += fmt::format("        a{} = c_null_ptr\n", p);
+    cls += fmt::format("        tag{0} = 0\n", p);
     cls += fmt::format(
-        "        if (nargs > {0}) a{0} = PyTuple_GetItem(args, "
-        "{0}_c_ptrdiff_t)\n",
-        p);
-    cls += fmt::format("        tag{} = 0\n", p);
-    cls += fmt::format("        if (c_associated(a{})) then\n", p);
-    str_t const I = "            ";
-
-    if (d || a || ss)
-      cls += fmt::format("{}call c_f_pointer(a{}, pyobj)\n", I, p);
-
-    // Scalar probe chain, one nested block per present kind. Exact-type
-    // tests (bool identity, str tp_name) need no exception dance and come
-    // first; bool must precede the int probe because PyLong accepts
-    // True/False. Then int before real before complex: each converter down
-    // the chain also accepts everything the earlier ones do. The str probe
-    // relies on pytype, set by derived_or_prim below.
-    enum probe_t { PBool, PStr, PInt, PReal, PCmplx };
-    std::vector<probe_t> probes;
-    if (bb)
-      probes.push_back(PBool);
-    if (ss)
-      probes.push_back(PStr);
-    if (ii)
-      probes.push_back(PInt);
-    if (rr)
-      probes.push_back(PReal);
-    if (zz)
-      probes.push_back(PCmplx);
-    std::function<str_t(size_t, str_t const &)> chain =
-        [&](size_t j, str_t const &ind) -> str_t {
-      if (j >= probes.size())
-        return "";
-      str_t s;
-      switch (probes[j]) {
-      case PBool:
-      case PStr: {
-        str_t const cond =
-            probes[j] == PBool
-                ? fmt::format(
-                      "c_ptr_eq(a{0}, Py_GetConstant(Py_CONSTANT_TRUE)) .or. "
-                      "c_ptr_eq(a{0}, Py_GetConstant(Py_CONSTANT_FALSE))",
-                      p)
-                : str_t{"c_string_eq(pytype%tp_name, \"str\")"};
-        s += fmt::format("{}if ({}) then\n", ind, cond);
-        s += fmt::format(
-            "{}    tag{} = {}\n", ind, p,
-            code_kind(probes[j] == PBool ? arg_tag_t::Bool : arg_tag_t::Str));
-        if (str_t const rest = chain(j + 1, ind + "    "); !rest.empty()) {
-          s += fmt::format("{}else\n", ind);
-          s += rest;
-        }
-        s += fmt::format("{}end if\n", ind);
-        break;
-      }
-      case PInt:
-      case PReal:
-      case PCmplx: {
-        struct probe_conv_t {
-          char const *var, *helper;
-          arg_tag_t::kind_t kind;
-        };
-        probe_conv_t const conv = probes[j] == PInt
-                                      ? probe_conv_t{"i", "int64", arg_tag_t::Int}
-                                  : probes[j] == PReal
-                                      ? probe_conv_t{"r", "double", arg_tag_t::Real}
-                                      : probe_conv_t{"z", "dcomplex",
-                                                     arg_tag_t::Cmplx};
-        s += fmt::format("{}val_{} = FLAIR_{}_from_PyObject(a{}, ok)\n", ind,
-                         conv.var, conv.helper, p);
-        s += fmt::format("{}if (ok) then\n", ind);
-        s += fmt::format("{}    tag{} = {}\n", ind, p, code_kind(conv.kind));
-        s += fmt::format("{}else\n", ind);
-        s += fmt::format("{}    call PyErr_Clear()\n", ind);
-        s += chain(j + 1, ind + "    ");
-        s += fmt::format("{}end if\n", ind);
-        break;
-      }
-      }
-      return s;
-    };
-    auto prim = [&](str_t const &ind) { return chain(0, ind); };
-
-    // derived / primitive block (no array)
-    auto derived_or_prim = [&](str_t const &ind) {
-      str_t s;
-      if (d || ss)
-        s += fmt::format("{}call c_f_pointer(pyobj%ob_type, pytype)\n", ind);
-      if (d) {
-        bool first = true;
-        for (arg_tag_t const *t : derived_tags) {
-          s += fmt::format("{}{} (c_string_eq(pytype%tp_name, \"{}\")) then\n",
-                           ind, first ? "if" : "else if", t->derived);
-          s += fmt::format("{}    tag{} = {}\n", ind, p, code_of(*t));
-          first = false;
-        }
-        if (ii || rr || zz || bb || ss) {
-          s += fmt::format("{}else\n", ind);
-          s += prim(ind + "    ");
-        }
-        s += fmt::format("{}end if\n", ind);
-      } else {
-        s += prim(ind);
-      }
-      return s;
-    };
-
-    if (a) {
-      cls += fmt::format("{}if (c_associated(numpy_api_ptr) .and. "
-                         "c_ptr_eq(pyobj%ob_type, PyArray_Type_ptr)) then\n",
-                         I);
-      cls += fmt::format("{}    nd  = PyArray_NDIM(a{})\n", I, p);
-      cls += fmt::format("{}    dsc = PyArray_DESCR(a{})\n", I, p);
-      bool first = true;
-      for (arg_tag_t const *t : array_tags) {
-        cls += fmt::format("{}    {} (nd == {} .and. c_ptr_eq(dsc, "
-                           "PyArray_DescrFromType({}))) then\n",
-                           I, first ? "if" : "else if", t->rank, t->npy);
-        cls += fmt::format("{}        tag{} = {}\n", I, p, code_of(*t));
-        first = false;
-      }
-      if (!array_tags.empty())
-        cls += fmt::format("{}    end if\n", I);
-      if (str_t const dop = derived_or_prim(I + "    "); !dop.empty()) {
-        cls += fmt::format("{}else\n", I);
-        cls += dop;
-      }
-      cls += fmt::format("{}end if\n", I);
-    } else {
-      cls += derived_or_prim(I);
-    }
-    cls += "        end if\n";
+        "        if (nargs > {0}) tag{0} = FLAIR_classify("
+        "PyTuple_GetItem(args, {0}_c_ptrdiff_t), {1})\n",
+        p, tbl);
   }
 
   // ---- forward to the matching specific wrapper ----------------------------

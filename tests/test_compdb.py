@@ -3,6 +3,7 @@ per-entry compile flags, foreign-flag tolerance, and the combined package
 extension (one .so for the whole closure) it emits by default."""
 
 import json
+import re
 
 
 def write_compdb(builder, entries) -> None:
@@ -186,7 +187,12 @@ def test_compdb_wrap_converter_closure(builder):
     assert '"proj.vec"' in vec and '"proj.vec.Vec2"' in vec
     assert "module py_vec_mod" in vec and "FLAIR_init_vec" in vec
     # the consumer's dispatcher keys on the same qualified tp_name
-    assert 'c_string_eq(pytype%tp_name, "proj.vec.Vec2")' in ops
+    s_var = re.search(r'(s_\d+) = "proj\.vec\.Vec2"//c_null_char', ops)
+    assert s_var, "expected the producer's qualified tp_name in the consumer"
+    assert re.search(
+        rf"FLAIR_tag_t\(FLAIR_K_DERIVED, \d+, 0, 0, c_loc\({s_var.group(1)}\)\)",
+        ops,
+    )
 
     script = (b.tmp / "build_proj.sh").read_text()
     assert script.index("py_vec.F90") < script.index("py_ops.F90")

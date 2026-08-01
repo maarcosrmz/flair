@@ -125,7 +125,8 @@ str_t codegen_module(module_info_t const &m_in, bool internal_init) {
         bound.insert(act);
       if (!mth.instantiate.empty())
         procedures +=
-            gen_instantiated_method(dt, mth, m, strings, tables, ext_types);
+            gen_instantiated_method(dt, mth, m, strings, tables,
+                                    ext_types, table_decls, pyinit_fills);
       else
         procedures +=
             gen_method(dt, *mth.ptr, m, strings, &tables[tn].method_fills,
@@ -189,7 +190,7 @@ str_t codegen_module(module_info_t const &m_in, bool internal_init) {
       continue;
     if (!fn.instantiate.empty())
       procedures += gen_instantiated_function(fn, m, strings, modfn_fills, nmod,
-                                              ext_types);
+                                              ext_types, table_decls);
     else
       procedures += gen_module_function(*fn.ptr, m, strings, &modfn_fills, nmod,
                                         ext_types);
@@ -217,7 +218,7 @@ str_t codegen_module(module_info_t const &m_in, bool internal_init) {
     }
     // ...then the dispatching wrapper exposed under the generic's name.
     procedures += gen_interface_wrapper(*iface.ptr, generated, strings,
-                                        &modfn_fills, nmod);
+                                        &modfn_fills, nmod, &table_decls);
   }
 
   // ---- module variables (live views / __getattr__ values) -------------------

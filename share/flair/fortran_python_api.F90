@@ -155,6 +155,26 @@ module python_api_mod
         type(c_ptr)          :: tp_name    ! const char* -- "<module>.<name>"
     end type
 
+    ! ===== Generic-interface dispatch =====
+    ! What a candidate overload accepts at one argument position. A generic's
+    ! dispatcher classifies each discriminating position against the tags
+    ! collected there, then picks the overload whose codes all match.
+    integer(c_int), parameter :: FLAIR_K_INT     = 1
+    integer(c_int), parameter :: FLAIR_K_REAL    = 2
+    integer(c_int), parameter :: FLAIR_K_CMPLX   = 3
+    integer(c_int), parameter :: FLAIR_K_BOOL    = 4
+    integer(c_int), parameter :: FLAIR_K_STR     = 5
+    integer(c_int), parameter :: FLAIR_K_DERIVED = 6
+    integer(c_int), parameter :: FLAIR_K_ARRAY   = 7
+
+    type, bind(C) :: FLAIR_tag_t
+        integer(c_int) :: kind   ! one of FLAIR_K_*
+        integer(c_int) :: code   ! value FLAIR_classify yields on a match
+        integer(c_int) :: rank   ! ARRAY only
+        integer(c_int) :: npy    ! ARRAY only: numpy dtype code
+        type(c_ptr)    :: name   ! DERIVED only: interned tp_name
+    end type
+
     ! ===== Instance layout of every generated wrapper type =====
     ! Each wrapper class stores an opaque pointer to a heap-allocated Fortran
     ! object of the wrapped derived type. The layout does not depend on that
@@ -1164,6 +1184,134 @@ contains
         else
             p = o%data
         end if
+    end function
+
+    ! ===== Generic-interface dispatch =====
+
+    ! Equality of two null-terminated C strings, without materialising either.
+    function FLAIR_cstr_eq(a, b) result(eq)
+        type(c_ptr), value :: a, b
+        logical :: eq
+        character(kind=c_char), pointer :: pa(:), pb(:)
+        integer, parameter :: cap = 1024
+        integer :: i
+        eq = .false.
+        if (.not. c_associated(a) .or. .not. c_associated(b)) return
+        eq = c_ptr_eq(a, b)
+        if (eq) return
+        call c_f_pointer(a, pa, [cap])
+        call c_f_pointer(b, pb, [cap])
+        do i = 1, cap
+            if (pa(i) /= pb(i)) return
+            if (pa(i) == c_null_char) exit
+        end do
+        eq = .true.
+    end function
+
+    ! The code of the first tag of `kind`, or 0 if this position accepts none.
+    function FLAIR_find_kind(tags, kind) result(code)
+        type(FLAIR_tag_t), intent(in) :: tags(:)
+        integer(c_int), value :: kind
+        integer :: code, i
+        code = 0
+        do i = 1, size(tags)
+            if (tags(i)%kind == kind) then
+                code = tags(i)%code
+                return
+            end if
+        end do
+    end function
+
+    ! Classify one argument against the kinds accepted at its position, and
+    ! return the matched tag's code (0 when absent or unmatched).
+    !
+    ! The probe order is what makes overload resolution well-defined, and it
+    ! lives here rather than being re-emitted per generic:
+    !   * bool before int, because PyLong accepts True/False;
+    !   * exact tests (bool identity, ndarray type, tp_name) before any
+    !     converter, since they cannot misfire;
+    !   * then int, real, complex -- each converter also accepts everything the
+    !     earlier ones do, so narrowest must come first.
+    ! A failed converter probe clears its own exception; on return nothing is
+    ! left pending.
+    function FLAIR_classify(obj, tags) result(code)
+        type(c_ptr), value :: obj
+        type(FLAIR_tag_t), intent(in) :: tags(:)
+        integer :: code
+        type(PyObject_t), pointer :: pyobj
+        type(PyTypeObject_t), pointer :: pytype
+        type(c_ptr) :: dsc
+        integer :: i
+        integer(c_int) :: nd
+        integer(c_long_long) :: vi
+        real(c_double) :: vr
+        complex(c_double_complex) :: vz
+        logical :: ok
+
+        code = 0
+        if (.not. c_associated(obj)) return
+        call c_f_pointer(obj, pyobj)
+
+        ! bool: identity against the singletons
+        if (c_ptr_eq(obj, Py_GetConstant(Py_CONSTANT_TRUE)) .or. &
+            c_ptr_eq(obj, Py_GetConstant(Py_CONSTANT_FALSE))) then
+            code = FLAIR_find_kind(tags, FLAIR_K_BOOL)
+            if (code /= 0) return
+        end if
+
+        ! ndarray: exact dtype + rank. An ndarray matching no array tag
+        ! matches nothing -- it is not a scalar of any kind.
+        if (c_associated(numpy_api_ptr)) then
+            if (c_ptr_eq(pyobj%ob_type, PyArray_Type_ptr)) then
+                nd  = PyArray_NDIM(obj)
+                dsc = PyArray_DESCR(obj)
+                do i = 1, size(tags)
+                    if (tags(i)%kind /= FLAIR_K_ARRAY) cycle
+                    if (tags(i)%rank == int(nd) .and. &
+                        c_ptr_eq(dsc, PyArray_DescrFromType(tags(i)%npy))) then
+                        code = tags(i)%code
+                        return
+                    end if
+                end do
+                return
+            end if
+        end if
+
+        ! wrapper instances, by the tp_name their defining module gave them
+        call c_f_pointer(pyobj%ob_type, pytype)
+        do i = 1, size(tags)
+            if (tags(i)%kind /= FLAIR_K_DERIVED) cycle
+            if (FLAIR_cstr_eq(pytype%tp_name, tags(i)%name)) then
+                code = tags(i)%code
+                return
+            end if
+        end do
+
+        ! str is exact too, and is never an int/real/complex
+        if (c_string_eq(pytype%tp_name, "str")) then
+            code = FLAIR_find_kind(tags, FLAIR_K_STR)
+            return
+        end if
+
+        code = FLAIR_find_kind(tags, FLAIR_K_INT)
+        if (code /= 0) then
+            vi = FLAIR_int64_from_PyObject(obj, ok)
+            if (ok) return
+            call PyErr_Clear()
+        end if
+        code = FLAIR_find_kind(tags, FLAIR_K_REAL)
+        if (code /= 0) then
+            vr = FLAIR_double_from_PyObject(obj, ok)
+            if (ok) return
+            call PyErr_Clear()
+        end if
+        code = FLAIR_find_kind(tags, FLAIR_K_CMPLX)
+        if (code /= 0) then
+            vz = FLAIR_dcomplex_from_PyObject(obj, ok)
+            if (ok) return
+            call PyErr_Clear()
+        end if
+        code = 0
     end function
 
     ! ===== C API tables =====

@@ -33,7 +33,7 @@ struct type_tables_t {
 // the directive or any specific is invalid.
 str_t gen_instantiated_function(fnt_info_t const &fi, module_info_t const &m,
                                 string_pool_t &strings, str_t &fills, int &n,
-                                ext_types_t &ext_types);
+                                ext_types_t &ext_types, str_t &table_decls);
 
 // '!flair$ instantiate'd type-bound procedure of `home`: the passed-object
 // self is always one polymorphic dimension (plus any polymorphic dummies), so
@@ -44,6 +44,7 @@ str_t gen_instantiated_function(fnt_info_t const &fi, module_info_t const &m,
 str_t gen_instantiated_method(dtype_info_t const &home, fnt_info_t const &mth,
                               module_info_t const &m, string_pool_t &strings,
                               std::map<str_t, type_tables_t> &tables,
-                              ext_types_t &ext_types);
+                              ext_types_t &ext_types, str_t &table_decls,
+                              str_t &tag_fills);
 
 } // namespace codegen

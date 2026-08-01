@@ -10,22 +10,31 @@ def test_generic_interfaces(builder):
 
     src = b.generated("generic")
 
-    # one dispatcher exposed under the generic name
+    # one dispatcher exposed under the generic name, classifying each
+    # discriminating position against a table of the kinds accepted there
     assert "function py_mod_describe(self, args, kwds)" in src
-
-    # derived-type discrimination compares the runtime tp_name
-    assert 'c_string_eq(pytype%tp_name, "generic.Thing_t")' in src
-
-    # array discrimination probes rank and dtype
-    assert "PyArray_NDIM" in src
-    assert "PyArray_DESCR" in src
-
-    # scalar probes convert with the checked helpers, complex last (its
-    # converter also accepts ints and floats)
+    assert "type(FLAIR_tag_t), save :: py_mod_describe_tags0(" in src
     assert re.search(
-        r"FLAIR_double_from_PyObject.*\n(.*\n)*?.*FLAIR_dcomplex_from_PyObject",
+        r"tag0 = FLAIR_classify\(PyTuple_GetItem\(args, 0_c_ptrdiff_t\), "
+        r"py_mod_describe_tags0\)",
         src,
     )
+
+    # derived-type discrimination carries the qualified runtime tp_name
+    s_var = re.search(
+        r'(s_\d+) = "generic\.Thing_t"//c_null_char', src
+    )
+    assert s_var, "expected the qualified tp_name in the string pool"
+    assert re.search(
+        rf"FLAIR_tag_t\(FLAIR_K_DERIVED, \d+, 0, 0, c_loc\({s_var.group(1)}\)\)",
+        src,
+    )
+
+    # array discrimination carries rank and dtype; scalar kinds carry neither
+    assert re.search(r"FLAIR_tag_t\(FLAIR_K_ARRAY, \d+, 1, NPY_FLOAT64, ", src)
+    assert re.search(r"FLAIR_tag_t\(FLAIR_K_ARRAY, \d+, 2, NPY_FLOAT64, ", src)
+    assert re.search(r"FLAIR_tag_t\(FLAIR_K_REAL, \d+, 0, 0, c_null_ptr\)", src)
+    assert re.search(r"FLAIR_tag_t\(FLAIR_K_CMPLX, \d+, 0, 0, c_null_ptr\)", src)
 
     # fallback when no overload matches
     assert "unexpected argument type for describe" in src

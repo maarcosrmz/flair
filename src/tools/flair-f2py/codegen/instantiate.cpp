@@ -161,44 +161,33 @@ str_t gen_dispatcher(str_t const &wrapper, str_t const &pyname, bool self_poly,
                      std::vector<size_t> const &arg_pos,
                      std::vector<sema::Symbol const *> const &types,
                      std::vector<combo_t> const &combos,
-                     string_pool_t &strings, bool fwd_kwds) {
+                     string_pool_t &strings, bool fwd_kwds, str_t &table_decls,
+                     str_t &tag_fills) {
   str_t decls;
-  decls += "        type(PyObject_t), pointer :: pyobj\n";
-  decls += "        type(PyTypeObject_t), pointer :: pytype\n";
   if (self_poly)
     decls += "        integer :: tags\n";
-  for (size_t p : arg_pos) {
-    decls += fmt::format("        type(c_ptr) :: a{}\n", p);
+  for (size_t p : arg_pos)
     decls += fmt::format("        integer :: tag{}\n", p);
-  }
   str_t const s_err = strings.intern("unexpected argument type for " + pyname);
 
-  auto classify = [&](str_t const &tagvar, str_t const &ind) {
-    str_t s = fmt::format("{}call c_f_pointer(pyobj%ob_type, pytype)\n", ind);
-    for (size_t t = 0; t < types.size(); ++t) {
-      s += fmt::format("{}{} (c_string_eq(pytype%tp_name, \"{}\")) then\n", ind,
-                       t == 0 ? "if" : "else if", tp_name_of(*types[t]));
-      s += fmt::format("{}    {} = {}\n", ind, tagvar, t + 1);
-    }
-    s += fmt::format("{}end if\n", ind);
-    return s;
-  };
+  // Every position here discriminates over the same instantiate type list, so
+  // one table serves them all; the tag is the type's index.
+  str_t const tbl = wrapper + "_tags";
+  table_decls += fmt::format("    type(FLAIR_tag_t), save :: {}({})\n", tbl,
+                             types.size());
+  tag_fills += fmt::format("        ! --- {} dispatch tags ---\n", pyname);
+  for (size_t t = 0; t < types.size(); ++t)
+    tag_fills += fmt::format(
+        "        {}({}) = FLAIR_tag_t(FLAIR_K_DERIVED, {}, 0, 0, c_loc({}))\n",
+        tbl, t + 1, t + 1, strings.intern(tp_name_of(*types[t])));
 
   str_t cls;
-  if (self_poly) {
-    cls += "        tags = 0\n";
-    cls += "        call c_f_pointer(self, pyobj)\n";
-    cls += classify("tags", "        ");
-  }
-  for (size_t p : arg_pos) {
-    cls += fmt::format(
-        "        a{0} = PyTuple_GetItem(args, {0}_c_ptrdiff_t)\n", p);
-    cls += fmt::format("        tag{} = 0\n", p);
-    cls += fmt::format("        if (c_associated(a{})) then\n", p);
-    cls += fmt::format("            call c_f_pointer(a{}, pyobj)\n", p);
-    cls += classify(fmt::format("tag{}", p), "            ");
-    cls += "        end if\n";
-  }
+  if (self_poly)
+    cls += fmt::format("        tags = FLAIR_classify(self, {})\n", tbl);
+  for (size_t p : arg_pos)
+    cls += fmt::format("        tag{0} = FLAIR_classify(PyTuple_GetItem(args, "
+                       "{0}_c_ptrdiff_t), {1})\n",
+                       p, tbl);
 
   str_t fwdc;
   for (combo_t const &c : combos) {
@@ -243,7 +232,7 @@ bool has_own_binding(module_info_t const &m, sema::Symbol const &tsym,
 
 str_t gen_instantiated_function(fnt_info_t const &fi, module_info_t const &m,
                                 string_pool_t &strings, str_t &fills, int &n,
-                                ext_types_t &ext_types) {
+                                ext_types_t &ext_types, str_t &table_decls) {
   sema::Symbol const &fn = *fi.ptr;
   if (!fn.has<sema::SubprogramDetails>())
     return "";
@@ -282,14 +271,15 @@ str_t gen_instantiated_function(fnt_info_t const &fi, module_info_t const &m,
                       "METH_VARARGS + METH_KEYWORDS");
   procedures += gen_dispatcher(dispatcher, pyname, /*self_poly=*/false,
                                plan.poly_pos, plan.types, combos, strings,
-                               /*fwd_kwds=*/true);
+                               /*fwd_kwds=*/true, table_decls, fills);
   return procedures;
 }
 
 str_t gen_instantiated_method(dtype_info_t const &home, fnt_info_t const &mth,
                               module_info_t const &m, string_pool_t &strings,
                               std::map<str_t, type_tables_t> &tables,
-                              ext_types_t &ext_types) {
+                              ext_types_t &ext_types, str_t &table_decls,
+                              str_t &tag_fills) {
   sema::Symbol const &binding = *mth.ptr;
   str_t const pyname = binding.name().ToString();
   str_t const home_tn = tname(*home.ptr);
@@ -337,7 +327,8 @@ str_t gen_instantiated_method(dtype_info_t const &home, fnt_info_t const &mth,
   // No-arg specifics keep the two-parameter METH_NOARGS signature.
   procedures += gen_dispatcher(dispatcher, pyname, /*self_poly=*/true,
                                plan.poly_pos, plan.types, combos, strings,
-                               /*fwd_kwds=*/!args.empty());
+                               /*fwd_kwds=*/!args.empty(), table_decls,
+                               tag_fills);
 
   str_t const flags =
       args.empty() ? "METH_NOARGS" : "METH_VARARGS + METH_KEYWORDS";
