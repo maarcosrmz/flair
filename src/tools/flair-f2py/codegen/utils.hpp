@@ -47,6 +47,10 @@ str_t tname(
 str_t clsname(
     Fortran::semantics::Symbol const &s); // Python class name, e.g. "Point"
 
+// Array-constructor assignment, continued across lines as needed.
+str_t array_assign(str_t const &indent, str_t const &lhs,
+                   std::vector<str_t> const &items);
+
 // Instance layout shared by every wrapper class, defined by the runtime: the
 // wrapped object hangs off `data`, so nothing here depends on the type.
 inline constexpr char obj_struct[] = "FLAIR_object_t";

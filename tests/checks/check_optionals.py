@@ -28,18 +28,24 @@ check("kw everything", optionals.describe(a=5, b=2.0) == 25)
 try:
     optionals.describe(5, a=5)
     check("duplicate positional+kw raises", False)
-except TypeError:
-    check("duplicate positional+kw raises", True)
+except TypeError as e:
+    check("duplicate positional+kw raises", "'a'" in str(e))
 try:
     optionals.describe(5, nope=1)
     check("unknown kw raises", False)
-except TypeError:
-    check("unknown kw raises", True)
+except TypeError as e:
+    # the offending keyword is named, as CPython does
+    check("unknown kw names the key", "nope" in str(e))
 try:
     optionals.describe()
     check("missing required raises", False)
+except TypeError as e:
+    check("missing required names the argument", "'a'" in str(e))
+try:
+    optionals.describe(5, 2.0, True, "ab", 99)
+    check("surplus positional raises", False)
 except TypeError:
-    check("missing required raises", True)
+    check("surplus positional raises", True)
 
 # --- optional arrays and explicit-length characters ---
 check("array absent", optionals.osum([1.0, 2.0]) == 3.0)

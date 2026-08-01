@@ -61,6 +61,29 @@ str_t string_pool_t::decls() const {
   return out;
 }
 
+// `<indent><lhs> = [a, b, c]`, broken with Fortran continuations so no line
+// exceeds the free-form 132-column limit (a wrapper may have many arguments).
+str_t array_assign(str_t const &indent, str_t const &lhs,
+                   std::vector<str_t> const &items) {
+  static constexpr size_t wrap_col = 100;
+  str_t const cont = indent + "    ";
+  str_t out = indent + lhs + " = [";
+  size_t col = out.size();
+  for (size_t k = 0; k < items.size(); ++k) {
+    str_t const sep = k + 1 < items.size() ? "," : "";
+    if (k != 0 && col + items[k].size() + sep.size() > wrap_col) {
+      out += " &\n" + cont;
+      col = cont.size();
+    } else if (k != 0) {
+      out += " ";
+      col += 1;
+    }
+    out += items[k] + sep;
+    col += items[k].size() + sep.size();
+  }
+  return out + "]\n";
+}
+
 str_t tname(semantics::Symbol const &s) { return lower(s.name().ToString()); }
 
 // Python class name: folded Fortran name with an uppercase initial (PEP 8),

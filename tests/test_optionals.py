@@ -12,15 +12,19 @@ def test_optionals(builder):
 
     src = b.generated("optionals")
 
-    # arguments arrive positionally or by keyword
-    assert "nargs = PyTuple_Size(args)" in src
-    assert "PyDict_GetItemString(kwds" in src
+    # binding positional/keyword arguments is one runtime call over the
+    # dummy names; the diagnostics live in the runtime, not in the wrapper
+    assert "argnames = [" in src
+    assert "FLAIR_parse_args(args, kwds, argnames, argreq, objs)" in src
     assert "METH_VARARGS + METH_KEYWORDS" in src
 
-    # argument-error diagnostics
-    assert "missing required argument 'a'" in src
-    assert "given by name and position" in src
-    assert "unexpected keyword argument" in src
+    # required vs optional is a flag table, not per-argument code
+    assert "argreq = [.true., .false., .false., .false.]" in src
+
+    # every failure unwinds to the one cleanup after the block
+    assert "fetch: block" in src
+    assert "exit fetch" in src
+    assert "end block fetch" in src
 
     # absent optionals travel as disassociated pointers
     assert "xo1 => null()" in src

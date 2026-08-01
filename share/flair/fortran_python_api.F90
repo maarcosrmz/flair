@@ -881,4 +881,266 @@ contains
         r = PyComplex_FromDoubles(real(z, c_double), aimag(z))
     end function
 
+    ! ===== Error reporting =====
+    ! Messages are assembled at run time rather than interned per call site by
+    ! the generator, so a wrapper only carries the argument names themselves.
+
+    ! A null-terminated C string as a Fortran string ("" when null). Only used
+    ! on error paths, so the scan cap costs nothing in the common case.
+    function FLAIR_c_str(p) result(s)
+        type(c_ptr), value        :: p
+        character(:), allocatable :: s
+        character(kind=c_char), pointer :: buf(:)
+        integer, parameter :: cap = 1024
+        integer :: n, i
+        if (.not. c_associated(p)) then
+            s = ""
+            return
+        end if
+        call c_f_pointer(p, buf, [cap])
+        n = 0
+        do i = 1, cap
+            if (buf(i) == c_null_char) exit
+            n = i
+        end do
+        allocate(character(len=n) :: s)
+        do i = 1, n
+            s(i:i) = buf(i)
+        end do
+    end function
+
+    ! Decimal text of an integer, for assembling messages.
+    function FLAIR_itoa(v) result(s)
+        integer, value            :: v
+        character(:), allocatable :: s
+        character(len=32) :: buf
+        write (buf, '(i0)') v
+        s = trim(buf)
+    end function
+
+    ! PyErr_SetString from a Fortran string. PyErr_SetString copies the bytes
+    ! into a new str, so the automatic target need not outlive the call.
+    subroutine FLAIR_err_str(exc, msg)
+        type(c_ptr), value           :: exc
+        character(len=*), intent(in) :: msg
+        character(kind=c_char, len=len(msg) + 1), target :: buf
+        buf = msg//c_null_char
+        call PyErr_SetString(exc, c_loc(buf))
+    end subroutine
+
+    ! prefix // <the C string `name`> // suffix.
+    subroutine FLAIR_err_named(exc, prefix, name, suffix)
+        type(c_ptr), value           :: exc, name
+        character(len=*), intent(in) :: prefix, suffix
+        call FLAIR_err_str(exc, prefix//FLAIR_c_str(name)//suffix)
+    end subroutine
+
+    ! ===== Argument marshalling =====
+
+    ! Bind the call's positional and keyword arguments to the dummies named by
+    ! `names`, filling objs(1:n) with borrowed references.
+    !
+    ! An argument that is absent, or an optional one given as None, yields
+    ! c_null_ptr -- so the caller tests presence with c_associated alone. None
+    ! is *not* folded away for a required dummy: that must reach the converter
+    ! and fail there, as passing None where a value is required is a type
+    ! error, not a missing argument.
+    !
+    ! Sets the exception and returns .false. on a surplus positional argument,
+    ! an argument given both by name and by position, a missing required
+    ! argument, or an unrecognised keyword (named in the message).
+    function FLAIR_parse_args(args, kwds, names, required, objs) result(ok)
+        type(c_ptr), value       :: args, kwds
+        type(c_ptr), intent(in)  :: names(:)
+        logical,     intent(in)  :: required(:)
+        type(c_ptr), intent(out) :: objs(:)
+        logical :: ok
+
+        integer :: n, i, nkw
+        integer(c_ptrdiff_t) :: nargs, pos
+        type(c_ptr) :: v, key, val, nonep
+        logical :: known
+
+        ok = .false.
+        n = size(objs)
+        nonep = Py_GetConstant(Py_CONSTANT_NONE)
+
+        nargs = 0_c_ptrdiff_t
+        if (c_associated(args)) nargs = PyTuple_Size(args)
+        if (nargs > int(n, c_ptrdiff_t)) then
+            call FLAIR_err_str(PyExc_TypeError, &
+                "takes at most "//FLAIR_itoa(n)//" positional argument(s) but "// &
+                FLAIR_itoa(int(nargs))//" were given")
+            return
+        end if
+
+        nkw = 0
+        do i = 1, n
+            objs(i) = c_null_ptr
+            if (int(i, c_ptrdiff_t) <= nargs) &
+                objs(i) = PyTuple_GetItem(args, int(i - 1, c_ptrdiff_t))
+            if (c_associated(kwds)) then
+                v = PyDict_GetItemString(kwds, names(i))
+                if (c_associated(v)) then
+                    if (c_associated(objs(i))) then
+                        call FLAIR_err_named(PyExc_TypeError, "argument '", &
+                            names(i), "' given by name and position")
+                        return
+                    end if
+                    objs(i) = v
+                    nkw = nkw + 1
+                end if
+            end if
+            if (.not. required(i)) then
+                ! An explicit None selects the absent branch of an optional.
+                if (c_associated(objs(i))) then
+                    if (c_ptr_eq(objs(i), nonep)) objs(i) = c_null_ptr
+                end if
+            else if (.not. c_associated(objs(i))) then
+                call FLAIR_err_named(PyExc_TypeError, &
+                    "missing required argument '", names(i), "'")
+                return
+            end if
+        end do
+
+        ! Every keyword must have been claimed above; if the counts disagree,
+        ! walk the dict to name the offending key.
+        if (c_associated(kwds)) then
+            if (PyDict_Size(kwds) /= int(nkw, c_ptrdiff_t)) then
+                pos = 0_c_ptrdiff_t
+                do while (PyDict_Next(kwds, pos, key, val) /= 0)
+                    known = .false.
+                    do i = 1, n
+                        if (PyUnicode_CompareWithASCIIString(key, names(i)) == 0) &
+                            known = .true.
+                    end do
+                    if (.not. known) then
+                        call FLAIR_err_str(PyExc_TypeError, "'"// &
+                            FLAIR_str_key(key)//"' is an invalid keyword argument")
+                        return
+                    end if
+                end do
+                ! Counts disagreed but every key matched: a non-str key.
+                call FLAIR_err_str(PyExc_TypeError, "keywords must be strings")
+                return
+            end if
+        end if
+        ok = .true.
+    end function
+
+    ! A dict key as text, for error messages; falls back to a placeholder for
+    ! a non-str key rather than letting its exception escape.
+    function FLAIR_str_key(key) result(s)
+        type(c_ptr), value        :: key
+        character(:), allocatable :: s
+        logical :: ok
+        s = FLAIR_str_from_PyObject(key, ok)
+        if (.not. ok) then
+            call PyErr_Clear()
+            s = "?"
+        end if
+    end function
+
+    ! Reject a string too long for an explicit-length character dummy, which
+    ! would otherwise be truncated silently by the assignment.
+    function FLAIR_check_len(s, maxlen, name) result(ok)
+        character(len=*), intent(in) :: s
+        integer,     value :: maxlen
+        type(c_ptr), value :: name
+        logical :: ok
+        ok = len(s) <= maxlen
+        if (.not. ok) call FLAIR_err_str(PyExc_ValueError, "argument '"// &
+            FLAIR_c_str(name)//"' exceeds character length "//FLAIR_itoa(maxlen))
+    end function
+
+    ! ===== Wrapper instances =====
+
+    ! The Fortran object held by a wrapper instance. No type check: callers
+    ! below have already established that `obj` is one of our instances.
+    function FLAIR_data_ptr(obj) result(p)
+        type(c_ptr), value :: obj
+        type(c_ptr) :: p
+        type(FLAIR_object_t), pointer :: o
+        call c_f_pointer(obj, o)
+        p = o%data
+    end function
+
+    ! .true. if obj is an instance of type_obj. A failed check leaves the
+    ! exception pending: either the one IsInstance itself raised (it returns
+    ! -1 in that case, which must not be clobbered) or `msg`.
+    function FLAIR_check_instance(obj, type_obj, msg) result(ok)
+        type(c_ptr), value :: obj, type_obj, msg
+        logical :: ok
+        ok = PyObject_IsInstance(obj, type_obj) == 1
+        if (ok) return
+        if (.not. c_associated(PyErr_Occurred())) &
+            call PyErr_SetString(PyExc_TypeError, msg)
+    end function
+
+    ! isinstance-checked unwrap of a wrapper instance to the address of the
+    ! Fortran object it holds. c_null_ptr with TypeError pending on mismatch.
+    function FLAIR_unwrap(obj, type_obj, msg) result(p)
+        type(c_ptr), value :: obj, type_obj, msg
+        type(c_ptr) :: p
+        p = c_null_ptr
+        if (FLAIR_check_instance(obj, type_obj, msg)) p = FLAIR_data_ptr(obj)
+    end function
+
+    ! As FLAIR_unwrap, with the message built from the two names the wrapper
+    ! already carries: the dummy argument's name and the expected class name.
+    function FLAIR_unwrap_arg(obj, type_obj, name, cls) result(p)
+        type(c_ptr), value :: obj, type_obj, name, cls
+        type(c_ptr) :: p
+        p = c_null_ptr
+        if (PyObject_IsInstance(obj, type_obj) /= 1) then
+            if (.not. c_associated(PyErr_Occurred())) &
+                call FLAIR_err_str(PyExc_TypeError, "argument '"// &
+                    FLAIR_c_str(name)//"' must be a "//FLAIR_c_str(cls)// &
+                    " instance")
+            return
+        end if
+        p = FLAIR_data_ptr(obj)
+    end function
+
+    ! ===== NumPy arrays =====
+
+    ! Coerce to an F-contiguous array of exactly `npy_type` and `rank`, and
+    ! report its extents. `writeback` adds WRITEBACKIFCOPY so that a coercion
+    ! copy is flushed back into the caller's array by FLAIR_array_release (a
+    ! no-op when no copy was made, i.e. the zero-copy fast path).
+    ! c_null_ptr with the exception pending on failure.
+    function FLAIR_array_from_PyObject(obj, npy_type, rank, writeback, dims) result(arr)
+        type(c_ptr),    value :: obj
+        integer(c_int), value :: npy_type, rank
+        logical,        value :: writeback
+        integer(c_ptrdiff_t), intent(out) :: dims(*)
+        type(c_ptr) :: arr
+        integer(c_int) :: reqs, k
+        arr = c_null_ptr
+        if (.not. c_associated(numpy_api_ptr)) then
+            call PyErr_SetString(PyExc_RuntimeError, c_loc(s_numpy_req))
+            return
+        end if
+        reqs = NPY_ARRAY_F_CONTIGUOUS
+        if (writeback) reqs = reqs + NPY_ARRAY_WRITEBACKIFCOPY
+        arr = PyArray_FromAny(obj, PyArray_DescrFromType(npy_type), rank, rank, &
+                              reqs, c_null_ptr)
+        if (.not. c_associated(arr)) return
+        do k = 1_c_int, rank
+            dims(k) = PyArray_DIM(arr, k - 1_c_int)
+        end do
+    end function
+
+    ! Flush any writeback copy and drop the reference. Safe on c_null_ptr, so
+    ! it doubles as the cleanup for an array that was never acquired.
+    subroutine FLAIR_array_release(arr)
+        type(c_ptr), value :: arr
+        integer(c_int) :: rc
+        if (.not. c_associated(arr)) return
+        ! Resolve before decref: an unresolved writeback array warns and drops
+        ! the write on decref. A no-op (0) for a non-writeback array.
+        if (c_associated(numpy_api_ptr)) rc = PyArray_ResolveWritebackIfCopy(arr)
+        call Py_DecRef(arr)
+    end subroutine
+
 end module python_api_mod

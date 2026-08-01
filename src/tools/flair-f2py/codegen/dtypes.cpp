@@ -565,9 +565,9 @@ str_t gen_method(dtype_info_t const &dt, sema::Symbol const &binding,
       wrapper_name.empty() ? fmt::format("py_{}_{}", tn, pyname) : wrapper_name;
 
   std::vector<sema::Symbol *> args = drop_self(sub.dummyArgs());
-  str_t decls, fetch, call_args, cleanup;
-  if (!parse_args(args, m, tn, "r = c_null_ptr", decls, fetch, call_args,
-                  strings, &cleanup, &ext_types, overrides))
+  str_t decls, pre, fetch, call_args, cleanup;
+  if (!parse_args(args, m, tn, decls, pre, fetch, call_args, strings, &cleanup,
+                  &ext_types, overrides))
     return fills == nullptr
                ? str_t{}
                : fmt::format("    ! TODO: unsupported argument(s): {}%{}\n\n",
@@ -595,12 +595,15 @@ str_t gen_method(dtype_info_t const &dt, sema::Symbol const &binding,
                                       : "METH_VARARGS + METH_KEYWORDS");
   }
 
-  str_t body = decls;
-  body += "        call c_f_pointer(self, pt)\n";
-  body += "        call c_f_pointer(pt%data, p)\n";
-  body += fetch;
-  body += build_result(rt, fmt::format("p%{}({})", pyname, call_args));
-  body += cleanup;
+  // Unwrapping self cannot fail (tp_methods are only reached on an instance),
+  // so it precedes the failure block.
+  str_t self_unwrap;
+  self_unwrap += "        call c_f_pointer(self, pt)\n";
+  self_unwrap += "        call c_f_pointer(pt%data, p)\n";
+  str_t const body = wrap_body(
+      decls, self_unwrap + pre, fetch,
+      build_result(rt, fmt::format("p%{}({})", pyname, call_args)), cleanup,
+      "c_null_ptr");
   return render(args.empty() ? tpl_noargs_method : tpl_method,
                 {{"fn", wrapper},
                  {"tname", tn},

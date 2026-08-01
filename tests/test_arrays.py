@@ -9,23 +9,23 @@ def test_arrays(builder):
 
     src = b.generated("arrays")
 
-    # mutating intents request writeback and resolve it in cleanup
-    assert "NPY_ARRAY_WRITEBACKIFCOPY" in src
-    assert "PyArray_ResolveWritebackIfCopy" in src
+    # acquisition and release are single runtime calls; the coercion flags and
+    # the resolve-before-decref ordering live in the runtime
+    acquire = re.findall(r"FLAIR_array_from_PyObject\(objs\(\d+\), (\w+), "
+                         r"(\d+)_c_int, (\.true\.|\.false\.), shp\d+\)", src)
+    assert acquire, "expected FLAIR_array_from_PyObject acquisitions"
+    assert "call FLAIR_array_release(arr0)" in src
 
-    # read-only intent(in) paths must NOT request writeback
-    readonly = re.findall(
-        r"PyArray_FromAny\(.*NPY_ARRAY_F_CONTIGUOUS, c_null_ptr\)", src
-    )
-    assert readonly, "expected read-only PyArray_FromAny conversions"
+    # mutating intents ask for writeback, read-only intent(in) ones do not
+    assert any(wb == ".true." for _, _, wb in acquire)
+    assert any(wb == ".false." for _, _, wb in acquire)
 
     # dtype mapping
-    assert "NPY_FLOAT64" in src
-    assert "NPY_INT32" in src
-    assert "NPY_INT64" in src
-    assert "NPY_COMPLEX128" in src
+    dtypes = {d for d, _, _ in acquire}
+    assert {"NPY_FLOAT64", "NPY_INT32", "NPY_INT64", "NPY_COMPLEX128"} <= dtypes
 
-    # rank-2 shape wiring
-    assert "shp0(2) = PyArray_DIM(arr0, 1_c_int)" in src
+    # rank reaches the runtime, which fills the shape
+    assert any(rank == "2" for _, rank, _ in acquire)
+    assert "call c_f_pointer(PyArray_DATA(arr0), v0, shp0)" in src
 
     b.run_check("check_arrays.py")

@@ -59,6 +59,24 @@ try:
 except Exception:
     check("rank mismatch raises", True)
 
+# An array acquired for an earlier argument is released even when a later
+# argument fails to convert. scale_inplace(x, f) takes x through
+# PyArray_FromAny before converting f; for an already-F-contiguous float64
+# array that is zero-copy and hands back a new reference to x itself, so a
+# missed release shows up directly as x's refcount creeping up.
+xr = np.asfortranarray([1.0, 2.0, 3.0])
+try:
+    arrays.scale_inplace(xr, "not a number")
+except TypeError:
+    pass
+before = sys.getrefcount(xr)
+for _ in range(100):
+    try:
+        arrays.scale_inplace(xr, "not a number")
+    except TypeError:
+        pass
+check("no leak when a later argument fails", sys.getrefcount(xr) == before)
+
 print("---")
 if failures:
     print("FAILURES:", failures)

@@ -123,10 +123,10 @@ bool note_ext_type(ext_types_t &ext_types, semantics::Symbol const &tsym) {
 }
 
 bool parse_args(std::vector<semantics::Symbol *> const &dummies,
-                module_info_t const &m, str_t const &owner_name,
-                str_t const &fail_return, str_t &decls, str_t &fetch,
-                str_t &call_args, string_pool_t &strings, str_t *cleanup,
-                ext_types_t *ext_types, poly_overrides_t const *overrides) {
+                module_info_t const &m, str_t const &owner_name, str_t &decls,
+                str_t &pre, str_t &fetch, str_t &call_args,
+                string_pool_t &strings, str_t *cleanup, ext_types_t *ext_types,
+                poly_overrides_t const *overrides) {
   str_t const ignore_hint = "; annotate '" + owner_name +
                             "' with a '!flair$ ignore' directive to skip it";
   auto add_actual = [&](str_t const &actual) {
@@ -135,20 +135,31 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
     call_args += actual;
   };
 
-  bool const any_opt =
-      std::any_of(dummies.begin(), dummies.end(), [](semantics::Symbol *d) {
-        return d != nullptr && d->attrs().test(semantics::Attr::OPTIONAL);
-      });
-  if (!dummies.empty()) {
-    decls += "        integer(c_ptrdiff_t) :: nargs\n";
-    decls += "        integer :: nkw\n";
-    decls += "        type(c_ptr) :: kwv\n";
-    if (any_opt)
-      decls += "        type(c_ptr) :: nonep\n";
-    fetch += "        nargs = PyTuple_Size(args)\n";
-    fetch += "        nkw = 0\n";
-    if (any_opt)
-      fetch += "        nonep = Py_GetConstant(Py_CONSTANT_NONE)\n";
+  // Every failure inside the fetch block leaves `r` at the caller's preset
+  // failure value and jumps to the shared cleanup after the block.
+  static constexpr char fail_return[] = "exit fetch";
+
+  // The runtime binds positional and keyword arguments in one call; the
+  // wrapper carries only the dummy names and which of them are required.
+  int const nargs = static_cast<int>(dummies.size());
+  if (nargs > 0) {
+    decls += fmt::format("        type(c_ptr) :: objs({})\n", nargs);
+    decls += fmt::format("        type(c_ptr) :: argnames({})\n", nargs);
+    decls += fmt::format("        logical :: argreq({})\n", nargs);
+    std::vector<str_t> names, reqs;
+    for (semantics::Symbol *d : dummies) {
+      if (d == nullptr)
+        return false;
+      names.push_back(
+          fmt::format("c_loc({})", strings.intern(d->name().ToString())));
+      reqs.push_back(d->attrs().test(semantics::Attr::OPTIONAL) ? ".false."
+                                                                : ".true.");
+    }
+    fetch += array_assign("        ", "argnames", names);
+    fetch += array_assign("        ", "argreq", reqs);
+    fetch += "        if (.not. FLAIR_parse_args(args, kwds, argnames, "
+             "argreq, objs)) ";
+    fetch += str_t(fail_return) + "\n";
   }
 
   int i = 0; // unique local suffix == positional index
@@ -168,51 +179,10 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
     }
     bool const opt = d->attrs().test(semantics::Attr::OPTIONAL);
     str_t const nm = d->name().ToString();
-    str_t const obj = fmt::format("a{}", i);
-    str_t const pres = fmt::format("pr{}", i);
-
-    // The argument may arrive positionally or by keyword (the dummy's name);
-    // an absent or None-valued optional counts as not present.
-    decls += fmt::format("        type(c_ptr) :: {}\n", obj);
-    if (opt)
-      decls += fmt::format("        logical :: {}\n", pres);
-    fetch += fmt::format("        {} = c_null_ptr\n", obj);
-    fetch += fmt::format(
-        "        if (nargs > {0}) {1} = PyTuple_GetItem(args, "
-        "{0}_c_ptrdiff_t)\n",
-        i, obj);
-    fetch += "        if (c_associated(kwds)) then\n";
-    fetch += fmt::format(
-        "            kwv = PyDict_GetItemString(kwds, c_loc({}))\n",
-        strings.intern(nm));
-    fetch += "            if (c_associated(kwv)) then\n";
-    fetch += fmt::format("                if (c_associated({})) then\n", obj);
-    fetch += fmt::format(
-        "                    call PyErr_SetString(PyExc_TypeError, "
-        "c_loc({}))\n",
-        strings.intern("argument '" + nm + "' given by name and position"));
-    fetch += fmt::format(
-        "                    {}\n                    return\n"
-        "                end if\n",
-        fail_return);
-    fetch += fmt::format("                {} = kwv\n", obj);
-    fetch += "                nkw = nkw + 1\n";
-    fetch += "            end if\n";
-    fetch += "        end if\n";
-    if (opt) {
-      fetch += fmt::format("        {} = c_associated({})\n", pres, obj);
-      fetch += fmt::format("        if ({0}) {0} = .not. c_ptr_eq({1}, "
-                           "nonep)\n",
-                           pres, obj);
-    } else {
-      fetch += fmt::format("        if (.not. c_associated({})) then\n", obj);
-      fetch += fmt::format(
-          "            call PyErr_SetString(PyExc_TypeError, c_loc({}))\n",
-          strings.intern("missing required argument '" + nm + "'"));
-      fetch += fmt::format("            {}\n            return\n        end "
-                           "if\n",
-                           fail_return);
-    }
+    // FLAIR_parse_args has already bound the argument and reported a missing
+    // required one; an absent optional (or one given as None) is c_null_ptr.
+    str_t const obj = fmt::format("objs({})", i + 1);
+    str_t const pres = fmt::format("c_associated({})", obj);
 
     // An instantiate override replaces the declared (polymorphic) type with a
     // concrete wrapped one, bypassing classification (which would either pick
@@ -229,30 +199,21 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
       str_t const val = fmt::format("v{}", i);
       str_t bfetch; // wrapped in `if (present)` for an optional dummy
       if (c.cls == dtype_class::Local) {
-        str_t const s_argtype =
-            strings.intern("argument '" + d->name().ToString() +
-                           "' must be a " + clsname(*c.sym) + " instance");
-        decls += fmt::format("        type({}), pointer :: pt{}\n", obj_struct,
-                             i);
+        // The runtime isinstance-checks and names both the argument and the
+        // expected class in the message, from strings the wrapper already
+        // carries: the dummy's name and the class name.
+        str_t const raw = fmt::format("raw{}", i);
+        decls += fmt::format("        type(c_ptr) :: {}\n", raw);
         decls += fmt::format("        type({}), pointer :: {}\n", tname(*c.sym),
                              val);
-        bfetch += fmt::format("        if (PyObject_IsInstance({}, "
-                              "py_{}_type_obj) /= 1) then\n",
-                              obj, tname(*c.sym));
-        // IsInstance may return -1 with its own exception set; don't clobber
-        // it.
-        bfetch +=
-            "            if (.not. c_associated(PyErr_Occurred())) then\n";
-        bfetch += fmt::format("                call "
-                              "PyErr_SetString(PyExc_TypeError, c_loc({}))\n",
-                              s_argtype);
-        bfetch += "            end if\n";
-        bfetch += fmt::format("            {}\n            return\n        end "
-                              "if\n",
-                              fail_return);
-        bfetch += fmt::format("        call c_f_pointer({}, pt{})\n", obj, i);
-        bfetch +=
-            fmt::format("        call c_f_pointer(pt{}%data, {})\n", i, val);
+        bfetch += fmt::format(
+            "        {} = FLAIR_unwrap_arg({}, py_{}_type_obj, c_loc({}), "
+            "c_loc({}))\n",
+            raw, obj, tname(*c.sym), strings.intern(nm),
+            strings.intern(clsname(*c.sym)));
+        bfetch += fmt::format(
+            "        if (.not. c_associated({})) {}\n", raw, fail_return);
+        bfetch += fmt::format("        call c_f_pointer({}, {})\n", raw, val);
       } else if (c.cls == dtype_class::Foreign && ext_types != nullptr &&
                  note_ext_type(*ext_types, *c.sym)) {
         // Unwrap via the external converter emitted by the file that wraps the
@@ -264,9 +225,8 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
         decls += fmt::format("        type({}), pointer :: {}\n", n, val);
         bfetch += fmt::format("        {} => {}({})\n", val,
                               from_pyobject_fn(n), obj);
-        bfetch += fmt::format("        if (.not. associated({})) then\n        "
-                              "    {}\n            return\n        end if\n",
-                              val, fail_return);
+        bfetch += fmt::format("        if (.not. associated({})) {}\n", val,
+                              fail_return);
       } else {
         flu::emit_error(*d, "flair-f2py: cannot wrap argument '" +
                                 d->name().ToString() + "': derived type '" +
@@ -277,7 +237,7 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
       if (opt) {
         // A disassociated pointer actual makes the optional dummy absent
         // (F2008 15.5.2.13).
-        fetch += fmt::format("        {} => null()\n", val);
+        pre += fmt::format("        {} => null()\n", val);
         fetch += fmt::format("        if ({}) then\n", pres) + bfetch +
                  "        end if\n";
       } else {
@@ -303,24 +263,16 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
       str_t bfetch; // wrapped in `if (present)` for an optional dummy
       bfetch += fmt::format("        {} = {}({}, ok{})\n", val, py_helper(*t),
                             obj, i);
-      bfetch += fmt::format("        if (.not. ok{}) then\n            {}\n    "
-                            "        return\n        end if\n",
-                            i, fail_return);
+      bfetch +=
+          fmt::format("        if (.not. ok{}) {}\n", i, fail_return);
       auto const cl = flu::char_len(*t);
       if (cl) {
         // Explicit-length character dummy: the actual must meet the declared
         // length (blank-padding shorter strings on assignment); reject longer
         // ones instead of truncating silently.
-        str_t const s_len = strings.intern(
-            fmt::format("argument '{}' exceeds character length {}",
-                        d->name().ToString(), *cl));
-        bfetch += fmt::format("        if (len({}) > {}) then\n", val, *cl);
-        bfetch += fmt::format("            call PyErr_SetString(PyExc_"
-                              "ValueError, c_loc({}))\n",
-                              s_len);
-        bfetch += fmt::format("            {}\n            return\n        end "
-                              "if\n",
-                              fail_return);
+        bfetch += fmt::format(
+            "        if (.not. FLAIR_check_len({}, {}, c_loc({}))) {}\n", val,
+            *cl, strings.intern(nm), fail_return);
       }
       if (!opt) {
         fetch += bfetch;
@@ -354,7 +306,7 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
           bfetch += fmt::format("        allocate({})\n", optv);
           bfetch += fmt::format("        {} = {}\n", optv, narrow(*t, val));
         }
-        fetch += fmt::format("        {} => null()\n", optv);
+        pre += fmt::format("        {} => null()\n", optv);
         fetch += fmt::format("        if ({}) then\n", pres) + bfetch +
                  "        end if\n";
         if (cleanup != nullptr)
@@ -370,9 +322,6 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
       // no-op when no copy was made, i.e. the zero-copy fast path).
       bool const writeback = d->attrs().test(semantics::Attr::INTENT_OUT) ||
                              d->attrs().test(semantics::Attr::INTENT_INOUT);
-      str_t const reqs =
-          writeback ? "NPY_ARRAY_F_CONTIGUOUS + NPY_ARRAY_WRITEBACKIFCOPY"
-                    : "NPY_ARRAY_F_CONTIGUOUS";
       str_t const arr = fmt::format("arr{}", i);
       str_t const val = fmt::format("v{}", i);
       str_t const shp = fmt::format("shp{}", i);
@@ -383,46 +332,29 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
       decls += fmt::format("        {}, pointer :: {}({})\n", ftype(*t), val,
                            colons);
       decls += fmt::format("        integer(c_ptrdiff_t) :: {}({})\n", shp, rr);
-      if (writeback)
-        decls += fmt::format("        integer(c_int) :: wb{}\n", i);
       str_t bfetch; // wrapped in `if (present)` for an optional dummy
       bfetch += fmt::format(
-          "        {} = PyArray_FromAny({}, PyArray_DescrFromType({}), "
-          "{}_c_int, {}_c_int, {}, c_null_ptr)\n",
-          arr, obj, npy(*t), rr, rr, reqs);
-      bfetch += fmt::format("        if (.not. c_associated({})) then\n        "
-                            "    {}\n            return\n        end if\n",
-                            arr, fail_return);
-      for (int k = 0; k < rr; ++k)
-        bfetch += fmt::format("        {}({}) = PyArray_DIM({}, {}_c_int)\n",
-                              shp, k + 1, arr, k);
+          "        {} = FLAIR_array_from_PyObject({}, {}, {}_c_int, {}, {})\n",
+          arr, obj, npy(*t), rr, writeback ? ".true." : ".false.", shp);
+      bfetch += fmt::format("        if (.not. c_associated({})) {}\n", arr,
+                            fail_return);
       bfetch +=
           fmt::format("        call c_f_pointer(PyArray_DATA({}), {}, {})\n",
                       arr, val, shp);
-      str_t bclean;
-      if (cleanup != nullptr) {
-        // Resolve before decref: an unresolved writeback array warns and drops
-        // the write on decref.
-        if (writeback)
-          bclean += fmt::format(
-              "        wb{0} = PyArray_ResolveWritebackIfCopy({1})\n", i, arr);
-        bclean += fmt::format("        call Py_DecRef({})\n", arr);
-      }
+      // Preset so the shared cleanup after the block is safe to run whether or
+      // not this argument was ever acquired.
+      pre += fmt::format("        {} = c_null_ptr\n", arr);
       if (opt) {
         // A disassociated pointer actual makes the optional dummy absent
         // (F2008 15.5.2.13).
-        fetch += fmt::format("        {} = c_null_ptr\n", arr);
-        fetch += fmt::format("        {} => null()\n", val);
+        pre += fmt::format("        {} => null()\n", val);
         fetch += fmt::format("        if ({}) then\n", pres) + bfetch +
                  "        end if\n";
-        if (cleanup != nullptr && !bclean.empty())
-          *cleanup += fmt::format("        if (c_associated({})) then\n", arr) +
-                      bclean + "        end if\n";
       } else {
         fetch += bfetch;
-        if (cleanup != nullptr)
-          *cleanup += bclean;
       }
+      if (cleanup != nullptr)
+        *cleanup += fmt::format("        call FLAIR_array_release({})\n", arr);
       add_actual(val);
     } else {
       flu::emit_error(*d, "flair-f2py: cannot wrap argument '" +
@@ -433,19 +365,45 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
     ++i;
   }
 
-  // Every keyword must have been consumed by a dummy above.
-  if (!dummies.empty()) {
-    fetch += "        if (c_associated(kwds)) then\n";
-    fetch += "            if (PyDict_Size(kwds) /= int(nkw, c_ptrdiff_t)) "
-             "then\n";
-    fetch += fmt::format(
-        "                call PyErr_SetString(PyExc_TypeError, c_loc({}))\n",
-        strings.intern("unexpected keyword argument"));
-    fetch += fmt::format("                {}\n                return\n", fail_return);
-    fetch += "            end if\n";
-    fetch += "        end if\n";
-  }
   return true;
+}
+
+// Shift every non-empty line right by one level.
+static str_t indent_lines(str_t const &s) {
+  str_t out;
+  size_t pos = 0;
+  while (pos < s.size()) {
+    size_t const eol = s.find('\n', pos);
+    size_t const end = eol == str_t::npos ? s.size() : eol;
+    if (end > pos)
+      out += "    ";
+    out.append(s, pos, end - pos);
+    out += "\n";
+    if (eol == str_t::npos)
+      break;
+    pos = eol + 1;
+  }
+  return out;
+}
+
+str_t wrap_body(str_t const &decls, str_t const &pre, str_t const &fetch,
+                str_t const &result, str_t const &cleanup,
+                str_t const &fail_value) {
+  // Nothing can fail before the call, so no unwinding is needed.
+  if (fetch.empty() && cleanup.empty())
+    return decls + pre + result;
+  // Argument binding and the call run inside a named block: each check
+  // `exit fetch`es, leaving r at the preset failure value, and the single
+  // cleanup after the block then runs on the success and failure paths alike.
+  // That is what makes an argument acquired before a later one failed still
+  // get released.
+  str_t body = decls + pre;
+  body += fmt::format("        r = {}\n", fail_value);
+  body += "        fetch: block\n";
+  body += indent_lines(fetch + result);
+  body += "        end block fetch\n";
+  body += cleanup;
+  return body;
 }
 
 str_t build_result(semantics::DeclTypeSpec const *rt, str_t const &call_expr) {
@@ -487,9 +445,9 @@ str_t gen_module_function(semantics::Symbol const &fn, module_info_t const &m,
       wrapper_name.empty() ? fmt::format("py_mod_{}", pyname) : wrapper_name;
   str_t const callee = call_name.empty() ? pyname : call_name;
 
-  str_t decls, fetch, call_args, cleanup;
-  if (!parse_args(sub.dummyArgs(), m, pyname, "r = c_null_ptr", decls, fetch,
-                  call_args, strings, &cleanup, &ext_types, overrides))
+  str_t decls, pre, fetch, call_args, cleanup;
+  if (!parse_args(sub.dummyArgs(), m, pyname, decls, pre, fetch, call_args,
+                  strings, &cleanup, &ext_types, overrides))
     return "";
 
   semantics::DeclTypeSpec const *rt =
@@ -510,9 +468,10 @@ str_t gen_module_function(semantics::Symbol const &fn, module_info_t const &m,
                              ? "METH_NOARGS"
                              : "METH_VARARGS + METH_KEYWORDS");
 
-  str_t body = decls + fetch;
-  body += build_result(rt, fmt::format("{}({})", callee, call_args));
-  body += cleanup;
+  str_t const body = wrap_body(
+      decls, pre, fetch,
+      build_result(rt, fmt::format("{}({})", callee, call_args)), cleanup,
+      "c_null_ptr");
   // METH_NOARGS wrappers are called with (self, NULL): no kwds parameter.
   if (sub.dummyArgs().empty())
     return render(tpl_noargs_function, {{"fn", wrapper}, {"body", body}}) +
