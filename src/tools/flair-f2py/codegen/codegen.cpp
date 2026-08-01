@@ -136,8 +136,8 @@ str_t codegen_module(module_info_t const &m_in, bool internal_init) {
       procedures += gen_getset(dt, f, m, strings, tables[tn].getset_fills,
                                tables[tn].ng, ext_types);
 
-    tables[tn].spec = spec_fills(tn, clsname(*dt.ptr), pyqual, strings);
-    tables[tn].create = create_fills(tn, clsname(*dt.ptr), strings);
+    tables[tn].create =
+        create_fills(tn, clsname(*dt.ptr), pyqual, strings);
   }
 
   for (auto const &[name, dt] : m.derived_types) {
@@ -160,8 +160,6 @@ str_t codegen_module(module_info_t const &m_in, bool internal_init) {
                     tn, tt.ng + 1);
     table_decls += fmt::format(
         "    type(PyType_Slot_t), target, save :: {}_slots(6)\n", tn);
-    table_decls +=
-        fmt::format("    type(PyType_Spec_t), target, save :: {}_spec\n", tn);
     table_decls += fmt::format(
         "    type(c_ptr), save :: py_{}_type_obj = c_null_ptr\n", tn);
 
@@ -170,7 +168,6 @@ str_t codegen_module(module_info_t const &m_in, bool internal_init) {
     pyinit_fills +=
         fmt::format("        ! --- {} getset table ---\n", tn) + getset_fills;
     pyinit_fills += slot_fills(tn);
-    pyinit_fills += tt.spec;
     pyinit_creates += tt.create;
   }
 
@@ -240,16 +237,10 @@ str_t codegen_module(module_info_t const &m_in, bool internal_init) {
   str_t const md = modpy + "_moddef";
   pyinit_fills += "        ! --- module method table ---\n" + modfn_fills;
   pyinit_fills += "        ! --- module def ---\n";
-  pyinit_fills += fmt::format("        {0}%m_name     = c_loc({1})\n", md,
-                              strings.intern(pyqual));
-  pyinit_fills += fmt::format("        {0}%m_doc      = c_null_ptr\n", md);
-  pyinit_fills += fmt::format("        {0}%m_size     = -1_c_ptrdiff_t\n", md);
   pyinit_fills +=
-      fmt::format("        {0}%m_methods  = c_loc(module_methods(1))\n", md);
-  pyinit_fills += fmt::format("        {0}%m_slots    = c_null_ptr\n", md);
-  pyinit_fills += fmt::format("        {0}%m_traverse = c_null_ptr\n", md);
-  pyinit_fills += fmt::format("        {0}%m_clear    = c_null_ptr\n", md);
-  pyinit_fills += fmt::format("        {0}%m_free     = c_null_ptr\n", md);
+      fmt::format("        call FLAIR_init_moduledef({}, c_loc({}), "
+                  "c_loc(module_methods(1)))\n",
+                  md, strings.intern(pyqual));
 
   // ---- assemble PyInit -----------------------------------------------------
   // Combined-package builds export the init as FLAIR_init_<modpy>: the single
@@ -317,36 +308,17 @@ str_t codegen_module(module_info_t const &m_in, bool internal_init) {
       str_t const tn = tname(tsym);
       str_t const s_type =
           strings.intern("expected a " + clsname(tsym) + " instance");
-      str_t const guard =
-          fmt::format("        if (.not. c_associated(py_{}_type_obj)) then\n"
-                      "            call PyErr_SetString(PyExc_RuntimeError, "
-                      "c_loc({}))\n            return\n        end if\n",
-                      tn, s_noinit);
 
       converters +=
           fmt::format("    function {}(p) result(r)\n", from_pyobject_fn(tn));
       converters += "        type(c_ptr), value :: p\n";
       converters += fmt::format("        type({}), pointer :: r\n", tn);
-      converters +=
-          fmt::format("        type({}), pointer :: obj\n", obj_struct);
+      converters += "        type(c_ptr) :: q\n";
       converters += "        r => null()\n";
-      converters += guard;
-      converters += fmt::format(
-          "        if (PyObject_IsInstance(p, py_{}_type_obj) /= 1) then\n",
-          tn);
-      converters += "            ! IsInstance may return -1 with its own "
-                    "exception set; don't clobber it\n";
-      converters +=
-          "            if (.not. c_associated(PyErr_Occurred())) then\n";
-      converters += fmt::format(
-          "                call PyErr_SetString(PyExc_TypeError, c_loc({}))\n",
-          s_type);
-      converters += "            end if\n";
-      converters += "            return\n";
-      converters += "        end if\n";
-      converters += "        call c_f_pointer(p, obj)\n";
-      converters +=
-          str_t("        call c_f_pointer(obj%data, r)\n");
+      converters += fmt::format("        q = FLAIR_unwrap_checked(p, "
+                                "py_{}_type_obj, c_loc({}), c_loc({}))\n",
+                                tn, s_type, s_noinit);
+      converters += "        if (c_associated(q)) call c_f_pointer(q, r)\n";
       converters += "    end function\n\n";
 
       converters += fmt::format("    function {}(data, owner) result(r)\n",
@@ -354,17 +326,9 @@ str_t codegen_module(module_info_t const &m_in, bool internal_init) {
       converters += "        type(c_ptr), value :: data, owner\n";
       converters += "        type(c_ptr) :: r\n";
       converters +=
-          fmt::format("        type({}), pointer :: obj\n", obj_struct);
-      converters += "        r = c_null_ptr\n";
-      converters += guard;
-      converters += fmt::format(
-          "        r = PyType_GenericAlloc(py_{}_type_obj, 0_c_ptrdiff_t)\n",
-          tn);
-      converters += "        if (.not. c_associated(r)) return\n";
-      converters += "        call c_f_pointer(r, obj)\n";
-      converters += "        obj%data = data\n";
-      converters += "        obj%owner = owner\n";
-      converters += "        call Py_IncRef(owner)\n";
+          fmt::format("        r = FLAIR_new_view(py_{}_type_obj, data, "
+                      "owner, c_loc({}))\n",
+                      tn, s_noinit);
       converters += "    end function\n\n";
     }
     if (!converters.empty())

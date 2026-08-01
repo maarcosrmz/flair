@@ -53,8 +53,7 @@ str_t gen_getset(dtype_info_t const &dt, sema::Symbol const &comp,
 str_t slot_fills(str_t const &tn);
 // `pyqual` is the module's python-visible name (module_pyqual): the spec name
 // is "<pyqual>.<cls>", which is the tp_name instances carry at runtime.
-str_t spec_fills(str_t const &tn, str_t const &cls, str_t const &pyqual,
-                 string_pool_t &strings);
-str_t create_fills(str_t const &tn, str_t const &cls, string_pool_t &strings);
+str_t create_fills(str_t const &tn, str_t const &cls, str_t const &pyqual,
+                   string_pool_t &strings);
 
 } // namespace codegen

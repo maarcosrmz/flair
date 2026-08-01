@@ -97,42 +97,24 @@ str_t clsname(semantics::Symbol const &s) {
 
 str_t method_row(str_t const &tbl, int idx, str_t const &name_var,
                  str_t const &wrapper, str_t const &flags) {
-  return fmt::format(
-      "        {0}({1})%ml_name  = c_loc({2})\n"
-      "        {0}({1})%ml_meth  = transfer(c_funloc({3}), c_null_ptr)\n"
-      "        {0}({1})%ml_flags = {4}\n"
-      "        {0}({1})%ml_pad   = 0\n"
-      "        {0}({1})%ml_doc   = c_null_ptr\n",
-      tbl, idx, name_var, wrapper, flags);
+  return fmt::format("        call FLAIR_set_method({}, {}, c_loc({}), "
+                     "c_funloc({}), {})\n",
+                     tbl, idx, name_var, wrapper, flags);
 }
 
 str_t method_sentinel(str_t const &tbl, int idx) {
-  return fmt::format("        {0}({1})%ml_name  = c_null_ptr\n"
-                     "        {0}({1})%ml_meth  = c_null_ptr\n"
-                     "        {0}({1})%ml_flags = 0\n"
-                     "        {0}({1})%ml_pad   = 0\n"
-                     "        {0}({1})%ml_doc   = c_null_ptr\n",
-                     tbl, idx);
+  return fmt::format("        call FLAIR_end_methods({}, {})\n", tbl, idx);
 }
 
 str_t getset_row(str_t const &tbl, int idx, str_t const &name_var,
                  str_t const &getter, str_t const &setter) {
-  return fmt::format(
-      "        {0}({1})%name    = c_loc({2})\n"
-      "        {0}({1})%get     = transfer(c_funloc({3}), c_null_ptr)\n"
-      "        {0}({1})%set     = transfer(c_funloc({4}), c_null_ptr)\n"
-      "        {0}({1})%doc     = c_null_ptr\n"
-      "        {0}({1})%closure = c_null_ptr\n",
-      tbl, idx, name_var, getter, setter);
+  return fmt::format("        call FLAIR_set_getset({}, {}, c_loc({}), "
+                     "c_funloc({}), c_funloc({}))\n",
+                     tbl, idx, name_var, getter, setter);
 }
 
 str_t getset_sentinel(str_t const &tbl, int idx) {
-  return fmt::format("        {0}({1})%name    = c_null_ptr\n"
-                     "        {0}({1})%get     = c_null_ptr\n"
-                     "        {0}({1})%set     = c_null_ptr\n"
-                     "        {0}({1})%doc     = c_null_ptr\n"
-                     "        {0}({1})%closure = c_null_ptr\n",
-                     tbl, idx);
+  return fmt::format("        call FLAIR_end_getset({}, {})\n", tbl, idx);
 }
 
 } // namespace codegen

@@ -55,8 +55,8 @@ def test_instantiate_directive(builder):
     # the TBP dispatcher is registered in the derived type's method table too
     # (whoami is declared on shape_t only; Python classes do not inherit)
     assert re.search(
-        r"circle_t_methods\(\d+\)%ml_meth\s*=\s*"
-        r"transfer\(c_funloc\(py_shape_t_whoami\)",
+        r"FLAIR_set_method\(circle_t_methods, \d+, [^,]+, "
+        r"c_funloc\(py_shape_t_whoami\)",
         src,
     )
 

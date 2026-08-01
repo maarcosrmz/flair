@@ -17,15 +17,13 @@
 
     subroutine {dealloc_fn}(self) bind(C)
         type(c_ptr), value :: self
-        type(FLAIR_object_t), pointer :: pt
         type({tname}), pointer :: p
+        type(c_ptr) :: owned
 
-        call c_f_pointer(self, pt)
-        if (c_associated(pt%owner)) then
-            ! view: storage lives inside the owner's Fortran object; drop our keep-alive ref
-            call Py_DecRef(pt%owner)
-        else if (c_associated(pt%data)) then
-            call c_f_pointer(pt%data, p)
+        ! non-null only when this instance owns its storage, i.e. is not a view
+        owned = FLAIR_dealloc_data(self)
+        if (c_associated(owned)) then
+            call c_f_pointer(owned, p)
             deallocate(p)
         end if
         call PyObject_Free(self)

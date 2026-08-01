@@ -1102,6 +1102,187 @@ contains
         p = FLAIR_data_ptr(obj)
     end function
 
+    ! A wrapper module's type objects are set by its PyInit, so a null one
+    ! means a consumer reached this type before the module defining it was
+    ! imported. Reported rather than dereferenced.
+    function FLAIR_type_ready(type_obj, noinit_msg) result(ok)
+        type(c_ptr), value :: type_obj, noinit_msg
+        logical :: ok
+        ok = c_associated(type_obj)
+        if (.not. ok) call PyErr_SetString(PyExc_RuntimeError, noinit_msg)
+    end function
+
+    ! Body of a generated <t>_from_PyObject converter.
+    function FLAIR_unwrap_checked(obj, type_obj, msg, noinit_msg) result(p)
+        type(c_ptr), value :: obj, type_obj, msg, noinit_msg
+        type(c_ptr) :: p
+        p = c_null_ptr
+        if (.not. FLAIR_type_ready(type_obj, noinit_msg)) return
+        p = FLAIR_unwrap(obj, type_obj, msg)
+    end function
+
+    ! Body of a generated <t>_view_PyObject converter: a new instance aliasing
+    ! `data`, which lives inside the Fortran object owned by `owner`. The view
+    ! holds a reference on the owner for as long as it lives, so the storage it
+    ! points into cannot be freed underneath it (NumPy's `base` pattern).
+    function FLAIR_new_view(type_obj, data, owner, noinit_msg) result(r)
+        type(c_ptr), value :: type_obj, data, owner, noinit_msg
+        type(c_ptr) :: r
+        type(FLAIR_object_t), pointer :: o
+        r = c_null_ptr
+        if (.not. FLAIR_type_ready(type_obj, noinit_msg)) return
+        r = PyType_GenericAlloc(type_obj, 0_c_ptrdiff_t)
+        if (.not. c_associated(r)) return
+        call c_f_pointer(r, o)
+        o%data = data
+        o%owner = owner
+        call Py_IncRef(owner)
+    end function
+
+    ! The type-independent half of tp_dealloc. For a view, drops the keep-alive
+    ! reference on the owner and returns c_null_ptr (the storage is not ours);
+    ! otherwise returns the Fortran object for the caller to deallocate, which
+    ! is the one step that needs the concrete type.
+    function FLAIR_dealloc_data(self) result(p)
+        type(c_ptr), value :: self
+        type(c_ptr) :: p
+        type(FLAIR_object_t), pointer :: o
+        p = c_null_ptr
+        call c_f_pointer(self, o)
+        if (c_associated(o%owner)) then
+            call Py_DecRef(o%owner)
+        else
+            p = o%data
+        end if
+    end function
+
+    ! ===== C API tables =====
+    ! Every row is several assignments because c_loc of a saved target is not a
+    ! constant expression, so the tables cannot be initialised declaratively.
+    ! Filling them here keeps one call per row at the call site.
+
+    subroutine FLAIR_set_method(tbl, i, name, fn, flags)
+        type(PyMethodDef_t), intent(inout) :: tbl(*)
+        integer,        value :: i
+        type(c_ptr),    value :: name
+        type(c_funptr), value :: fn
+        integer(c_int), value :: flags
+        tbl(i)%ml_name  = name
+        tbl(i)%ml_meth  = transfer(fn, c_null_ptr)
+        tbl(i)%ml_flags = flags
+        tbl(i)%ml_pad   = 0
+        tbl(i)%ml_doc   = c_null_ptr
+    end subroutine
+
+    ! The all-null row that terminates a method table.
+    subroutine FLAIR_end_methods(tbl, i)
+        type(PyMethodDef_t), intent(inout) :: tbl(*)
+        integer, value :: i
+        tbl(i)%ml_name  = c_null_ptr
+        tbl(i)%ml_meth  = c_null_ptr
+        tbl(i)%ml_flags = 0
+        tbl(i)%ml_pad   = 0
+        tbl(i)%ml_doc   = c_null_ptr
+    end subroutine
+
+    subroutine FLAIR_set_getset(tbl, i, name, get, set)
+        type(PyGetSetDef_t), intent(inout) :: tbl(*)
+        integer,        value :: i
+        type(c_ptr),    value :: name
+        type(c_funptr), value :: get, set
+        tbl(i)%name    = name
+        tbl(i)%get     = transfer(get, c_null_ptr)
+        tbl(i)%set     = transfer(set, c_null_ptr)
+        tbl(i)%doc     = c_null_ptr
+        tbl(i)%closure = c_null_ptr
+    end subroutine
+
+    subroutine FLAIR_end_getset(tbl, i)
+        type(PyGetSetDef_t), intent(inout) :: tbl(*)
+        integer, value :: i
+        tbl(i)%name    = c_null_ptr
+        tbl(i)%get     = c_null_ptr
+        tbl(i)%set     = c_null_ptr
+        tbl(i)%doc     = c_null_ptr
+        tbl(i)%closure = c_null_ptr
+    end subroutine
+
+    subroutine FLAIR_set_slot(tbl, i, slot, pfunc)
+        type(PyType_Slot_t), intent(inout) :: tbl(*)
+        integer,        value :: i
+        integer(c_int), value :: slot
+        type(c_funptr), value :: pfunc
+        tbl(i)%slot  = slot
+        tbl(i)%pad   = 0
+        tbl(i)%pfunc = transfer(pfunc, c_null_ptr)
+    end subroutine
+
+    ! A slot holding a table address rather than a function pointer.
+    subroutine FLAIR_set_slot_ptr(tbl, i, slot, p)
+        type(PyType_Slot_t), intent(inout) :: tbl(*)
+        integer,        value :: i
+        integer(c_int), value :: slot
+        type(c_ptr),    value :: p
+        tbl(i)%slot  = slot
+        tbl(i)%pad   = 0
+        tbl(i)%pfunc = p
+    end subroutine
+
+    ! The zero slot that terminates a slot table.
+    subroutine FLAIR_end_slots(tbl, i)
+        type(PyType_Slot_t), intent(inout) :: tbl(*)
+        integer, value :: i
+        tbl(i)%slot  = 0
+        tbl(i)%pad   = 0
+        tbl(i)%pfunc = c_null_ptr
+    end subroutine
+
+    ! m_size = -1: no per-interpreter state, so the module does not support
+    ! sub-interpreters -- matching what the generated wrappers assume.
+    subroutine FLAIR_init_moduledef(def, name, methods)
+        type(PyModuleDef_t), intent(inout) :: def
+        type(c_ptr), value :: name, methods
+        def%m_name     = name
+        def%m_doc      = c_null_ptr
+        def%m_size     = -1_c_ptrdiff_t
+        def%m_methods  = methods
+        def%m_slots    = c_null_ptr
+        def%m_traverse = c_null_ptr
+        def%m_clear    = c_null_ptr
+        def%m_free     = c_null_ptr
+    end subroutine
+
+    ! Build a heap type from `slots` and bind it into `md` under `attr`.
+    ! Returns the type (a borrowed view of the module's reference, which keeps
+    ! it alive for view getters and isinstance checks), or c_null_ptr with the
+    ! exception pending. The caller owns unwinding `md` on failure.
+    !
+    ! The spec is a local because PyType_FromSpec reads it only during the
+    ! call. What it *does* retain is `qualname` (straight into tp_name) and the
+    ! method/getset tables the slots point at, so those must outlive the type
+    ! -- which is why the generated wrapper keeps all of them `target, save`.
+    function FLAIR_add_type(md, qualname, attr, basicsize, slots) result(type_obj)
+        type(c_ptr), value :: md, qualname, attr
+        integer(c_int), value :: basicsize
+        type(PyType_Slot_t), intent(in), target :: slots(*)
+        type(c_ptr) :: type_obj
+        type(PyType_Spec_t), target :: spec
+        integer(c_int) :: rc
+        spec%name      = qualname
+        spec%basicsize = basicsize
+        spec%itemsize  = 0
+        spec%flags     = Py_TPFLAGS_DEFAULT
+        spec%pad       = 0
+        spec%slots     = c_loc(slots(1))
+        type_obj = PyType_FromSpec(c_loc(spec))
+        if (.not. c_associated(type_obj)) return
+        rc = PyModule_AddObjectRef(md, attr, type_obj)
+        if (rc < 0) then
+            call Py_DecRef(type_obj)
+            type_obj = c_null_ptr
+        end if
+    end function
+
     ! ===== NumPy arrays =====
 
     ! Coerce to an F-contiguous array of exactly `npy_type` and `rank`, and

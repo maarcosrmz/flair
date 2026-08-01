@@ -670,57 +670,40 @@ str_t gen_getset(dtype_info_t const &dt, sema::Symbol const &comp,
 str_t slot_fills(str_t const &tn) {
   str_t const sl = tn + "_slots", mt = tn + "_methods", gt = tn + "_getset";
   str_t s = fmt::format("        ! --- {} slots ---\n", tn);
-  auto slot = [&](int idx, str_t const &num, str_t const &pfunc) {
-    s += fmt::format("        {0}({1})%slot  = {2}\n", sl, idx, num);
-    s += fmt::format("        {0}({1})%pad   = 0\n", sl, idx);
-    s += fmt::format("        {0}({1})%pfunc = {2}\n", sl, idx, pfunc);
+  auto slot = [&](int idx, str_t const &num, str_t const &fn) {
+    s += fmt::format("        call FLAIR_set_slot({}, {}, {}, c_funloc({}))\n",
+                     sl, idx, num, fn);
   };
-  slot(1, "Py_tp_new",
-       fmt::format("transfer(c_funloc(py_{}_tp_new), c_null_ptr)", tn));
-  slot(2, "Py_tp_init",
-       fmt::format("transfer(c_funloc(py_{}_tp_init), c_null_ptr)", tn));
-  slot(3, "Py_tp_dealloc",
-       fmt::format("transfer(c_funloc(py_{}_tp_dealloc), c_null_ptr)", tn));
-  slot(4, "Py_tp_methods", fmt::format("c_loc({}(1))", mt));
-  slot(5, "Py_tp_getset", fmt::format("c_loc({}(1))", gt));
-  slot(6, "0", "c_null_ptr");
-  return s;
-}
-
-str_t spec_fills(str_t const &tn, str_t const &cls, str_t const &pyqual,
-                 string_pool_t &strings) {
-  str_t const sp = tn + "_spec";
-  str_t s = fmt::format("        ! --- {} spec ---\n", tn);
-  s += fmt::format("        {0}%name      = c_loc({1})\n", sp,
-                   strings.intern(pyqual + "." + cls));
-  s += fmt::format("        {0}%basicsize = int(c_sizeof(dummy_obj), c_int)\n",
-                   sp);
-  s += fmt::format("        {0}%itemsize  = 0\n", sp);
-  s += fmt::format("        {0}%flags     = Py_TPFLAGS_DEFAULT\n", sp);
-  s += fmt::format("        {0}%pad       = 0\n", sp);
-  s +=
-      fmt::format("        {0}%slots     = c_loc({1}(1))\n", sp, tn + "_slots");
-  return s;
-}
-
-str_t create_fills(str_t const &tn, str_t const &cls, string_pool_t &strings) {
-  str_t s;
-  s += fmt::format("        type_ptr = PyType_FromSpec(c_loc({}))\n",
-                   tn + "_spec");
-  s += "        if (.not. c_associated(type_ptr)) then\n";
-  s += "            call Py_DecRef(mod_ptr)\n            r = c_null_ptr\n      "
-       "      return\n        end if\n";
+  slot(1, "Py_tp_new", fmt::format("py_{}_tp_new", tn));
+  slot(2, "Py_tp_init", fmt::format("py_{}_tp_init", tn));
+  slot(3, "Py_tp_dealloc", fmt::format("py_{}_tp_dealloc", tn));
+  // These two slots carry table addresses, not function pointers.
   s += fmt::format(
-      "        rc = PyModule_AddObjectRef(mod_ptr, c_loc({}), type_ptr)\n",
-      strings.intern(cls));
-  // The module keeps the type object reachable (and strongly referenced) for
-  // view getters (PyType_GenericAlloc) and isinstance checks.
-  s += fmt::format("        py_{}_type_obj = type_ptr\n", tn);
-  s += "        if (rc < 0) then\n";
-  s += "            call Py_DecRef(type_ptr)\n";
-  s += fmt::format("            py_{}_type_obj = c_null_ptr\n", tn);
-  s += "            call Py_DecRef(mod_ptr)\n            r = c_null_ptr\n      "
-       "      return\n        end if\n";
+      "        call FLAIR_set_slot_ptr({}, 4, Py_tp_methods, c_loc({}(1)))\n",
+      sl, mt);
+  s += fmt::format(
+      "        call FLAIR_set_slot_ptr({}, 5, Py_tp_getset, c_loc({}(1)))\n",
+      sl, gt);
+  s += fmt::format("        call FLAIR_end_slots({}, 6)\n", sl);
+  return s;
+}
+
+// The spec now lives inside FLAIR_add_type, so creation is one call; the
+// module holds the type's only strong reference, which is what keeps it alive
+// for view getters (PyType_GenericAlloc) and isinstance checks.
+str_t create_fills(str_t const &tn, str_t const &cls, str_t const &pyqual,
+                   string_pool_t &strings) {
+  str_t s;
+  s += fmt::format(
+      "        py_{0}_type_obj = FLAIR_add_type(mod_ptr, c_loc({1}), "
+      "c_loc({2}), int(c_sizeof(dummy_obj), c_int), {0}_slots)\n",
+      tn, strings.intern(pyqual + "." + cls), strings.intern(cls));
+  s += fmt::format(
+      "        if (.not. c_associated(py_{}_type_obj)) then\n", tn);
+  s += "            call Py_DecRef(mod_ptr)\n";
+  s += "            r = c_null_ptr\n";
+  s += "            return\n";
+  s += "        end if\n";
   return s;
 }
 
