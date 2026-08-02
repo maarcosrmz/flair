@@ -95,6 +95,14 @@ str_t clsname(semantics::Symbol const &s) {
   return n;
 }
 
+str_t binder_m_fn(str_t const &module_name, str_t const &type_name) {
+  return "flair_bindm_" + fold_lower(module_name) + "_" + fold_lower(type_name);
+}
+
+str_t binder_g_fn(str_t const &module_name, str_t const &type_name) {
+  return "flair_bindg_" + fold_lower(module_name) + "_" + fold_lower(type_name);
+}
+
 str_t method_row(str_t const &tbl, int idx, str_t const &name_var,
                  str_t const &wrapper, str_t const &flags) {
   return fmt::format("        call FLAIR_set_method({}, {}, c_loc({}), "
@@ -102,7 +110,7 @@ str_t method_row(str_t const &tbl, int idx, str_t const &name_var,
                      tbl, idx, name_var, wrapper, flags);
 }
 
-str_t method_sentinel(str_t const &tbl, int idx) {
+str_t method_sentinel(str_t const &tbl, str_t const &idx) {
   return fmt::format("        call FLAIR_end_methods({}, {})\n", tbl, idx);
 }
 
@@ -113,8 +121,22 @@ str_t getset_row(str_t const &tbl, int idx, str_t const &name_var,
                      tbl, idx, name_var, getter, setter);
 }
 
-str_t getset_sentinel(str_t const &tbl, int idx) {
+str_t getset_sentinel(str_t const &tbl, str_t const &idx) {
   return fmt::format("        call FLAIR_end_getset({}, {})\n", tbl, idx);
+}
+
+str_t bind_method_row(str_t const &name_var, str_t const &wrapper,
+                      str_t const &flags) {
+  return fmt::format("        call FLAIR_bind_method(tbl, n, cap, c_loc({}), "
+                     "c_funloc({}), {})\n",
+                     name_var, wrapper, flags);
+}
+
+str_t bind_getset_row(str_t const &name_var, str_t const &getter,
+                      str_t const &setter) {
+  return fmt::format("        call FLAIR_bind_getset(tbl, n, cap, c_loc({}), "
+                     "c_funloc({}), c_funloc({}))\n",
+                     name_var, getter, setter);
 }
 
 } // namespace codegen

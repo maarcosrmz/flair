@@ -16,7 +16,10 @@ using str_t = std::string;
 struct fnt_info_t {
   sym_ptr_t ptr = nullptr; // may have ProcBindingDetails or SubprogramDetails
   bool rewrite = false;
-  sym_ptr_t parent;
+  // For a type-bound procedure: the derived type whose scope declares the
+  // binding. Differs from the type it was collected for when the binding is
+  // inherited through `extends(...)`.
+  sym_ptr_t declared_in = nullptr;
   // '!flair$ instantiate' type names, sorted for deterministic codegen
   std::vector<str_t> instantiate;
   // [[nodiscard]] semantics::ProcBindingDetails const &prog_binding_details()

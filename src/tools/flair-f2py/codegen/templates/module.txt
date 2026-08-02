@@ -12,6 +12,11 @@ module py_{modpy}_mod
 {tables}
 contains
 
+    ! ===== Table binders =====
+    ! One per wrapped type and table. The binding label makes each a plain
+    ! external symbol, so another wrapper can install these rows knowing only
+    ! an interface block -- never this module's .mod.
+{binders}
 {procedures}
 {pyinit}
 {converters}

@@ -3,6 +3,7 @@
 #include <llvm/ADT/STLExtras.h>
 
 #include <algorithm>
+#include <iterator>
 
 #include "codegen/utils.hpp"
 #include "flu/paths.hpp"
@@ -143,11 +144,36 @@ void traverse_module(sema::Symbol const &mod_sym, state &s) {
     if (dtype_scope == nullptr)
       return;
 
-    auto const match_proc_binding = [&s, &dt](sema::Symbol const &sym) {
+    // Flang does not copy inherited bindings into an extending type's scope,
+    // so the bindings are gathered one type at a time along the `extends(...)`
+    // chain. Levels are visited nearest-first, so the first binding seen under
+    // a name is the one that overrides; they are emitted base-first, so a
+    // Python `dir()` reads base-to-derived.
+    //
+    // An inherited binding is collected for the extending type, so codegen
+    // wraps it with a `type(<extending type>), pointer` receiver -- which is
+    // what makes dispatch inside the inherited body see the true dynamic type,
+    // as a plain `call d%binding()` would. `declared_in` records the level it
+    // came from, the only thing that still needs the distinction.
+    std::unordered_set<str_t> seen;
+    std::vector<std::vector<fnt_info_t>> levels;
+    sema::Symbol const *level_type = type_sym;
+
+    auto const match_proc_binding = [&s, &seen, &levels,
+                                     &level_type](sema::Symbol const &sym) {
       if (not sym.has<sema::ProcBindingDetails>())
         return;
       // Type-bound procedure accesibility is public by default
       if (sym.attrs().test(sema::Attr::PRIVATE))
+        return;
+      // Already bound under this name by the type itself or a nearer ancestor:
+      // that one overrides this.
+      if (not seen.insert(sym.name().ToString()).second)
+        return;
+      // A deferred binding declares a shape, not a callable procedure. A
+      // concrete type has overridden it (taking the name above); an
+      // unoverridden one belongs to a type that cannot be instantiated.
+      if (sym.attrs().test(sema::Attr::DEFERRED))
         return;
 
       // The instantiate directive sits on the actual subprogram in the
@@ -155,10 +181,22 @@ void traverse_module(sema::Symbol const &mod_sym, state &s) {
       std::vector<str_t> inst;
       if (auto const *act = flu::binding_actual(sym))
         inst = s.instantiate_types(*act);
-      dt.methods.emplace_back(fnt_info_t{&sym, false, dt.ptr, std::move(inst)});
+      levels.back().emplace_back(
+          fnt_info_t{&sym, false, level_type, std::move(inst)});
     };
 
+    levels.emplace_back();
     llvm::for_each(dtype_scope->GetSymbols(), match_proc_binding);
+    auto const chain = flu::ancestors(*type_sym); // base-first
+    for (auto a = chain.rbegin(); a != chain.rend(); ++a) {
+      levels.emplace_back();
+      level_type = *a;
+      if (auto const *scope = (*a)->scope())
+        llvm::for_each(scope->GetSymbols(), match_proc_binding);
+    }
+    for (auto lv = levels.rbegin(); lv != levels.rend(); ++lv)
+      dt.methods.insert(dt.methods.end(), std::make_move_iterator(lv->begin()),
+                        std::make_move_iterator(lv->end()));
   };
 
   auto const match_variable = [&s](sema::Symbol const &sym) {

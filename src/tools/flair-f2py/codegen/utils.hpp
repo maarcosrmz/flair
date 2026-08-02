@@ -56,12 +56,29 @@ str_t array_assign(str_t const &indent, str_t const &lhs,
 inline constexpr char obj_struct[] = "FLAIR_object_t";
 inline constexpr char obj_data[] = "data";
 
-// PyInit table-fill rows.
+// Names of the per-type table binders. They are external `bind(C)`
+// subprograms rather than module procedures, so a consumer declares them with
+// an interface block instead of use-associating the producer's wrapper module.
+// The module name is part of the symbol because the global namespace is flat.
+str_t binder_m_fn(str_t const &module_name, str_t const &type_name);
+str_t binder_g_fn(str_t const &module_name, str_t const &type_name);
+
+// PyInit table-fill rows, at a statically known index (the module method
+// table, whose size codegen knows exactly).
 str_t method_row(str_t const &tbl, int idx, str_t const &name_var,
                  str_t const &wrapper, str_t const &flags);
-str_t method_sentinel(str_t const &tbl, int idx);
+str_t method_sentinel(str_t const &tbl, str_t const &idx);
 str_t getset_row(str_t const &tbl, int idx, str_t const &name_var,
                  str_t const &getter, str_t const &setter);
-str_t getset_sentinel(str_t const &tbl, int idx);
+str_t getset_sentinel(str_t const &tbl, str_t const &idx);
+
+// Rows of a per-type table, emitted into the body of that type's binder. The
+// binder's dummy names (tbl, n, cap) are fixed, and the runtime keys rows by
+// name, so an override -- or a dispatcher taking over an inherited name --
+// replaces rather than duplicates.
+str_t bind_method_row(str_t const &name_var, str_t const &wrapper,
+                      str_t const &flags);
+str_t bind_getset_row(str_t const &name_var, str_t const &getter,
+                      str_t const &setter);
 
 } // namespace codegen

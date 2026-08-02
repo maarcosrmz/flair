@@ -192,6 +192,12 @@ module python_api_mod
         type(c_ptr)       :: owner         ! non-null: view; the owning PyObject
     end type
 
+    ! Placeholder actuals for the counting pass of a `flair_bind{m,g}_*` binder
+    ! (cap == 0), which advances the cursor without touching the table. The
+    ! dummies are assumed-size, so a valid array has to be passed regardless.
+    type(PyMethodDef_t), target, save :: FLAIR_probe_methods(1)
+    type(PyGetSetDef_t), target, save :: FLAIR_probe_getset(1)
+
     ! ===== Exception objects (exported symbols from the interpreter) =====
     type(c_ptr), bind(C, name="PyExc_TypeError")      :: PyExc_TypeError
     type(c_ptr), bind(C, name="PyExc_ValueError")     :: PyExc_ValueError
@@ -1374,6 +1380,62 @@ contains
         tbl(i)%set     = c_null_ptr
         tbl(i)%doc     = c_null_ptr
         tbl(i)%closure = c_null_ptr
+    end subroutine
+
+    ! ===== Table binders =====
+    ! A wrapped type's rows are installed by a generated `flair_bindm_<m>_<t>`
+    ! / `flair_bindg_<m>_<t>` subroutine, which calls these once per row. Two
+    ! passes: cap == 0 only counts (so the caller can size the table), then a
+    ! second pass with the real table and its capacity fills it.
+    !
+    ! Rows are keyed by name: a later row with an equal name overwrites the
+    ! earlier one in place rather than appending, so a type-bound procedure an
+    ! extending type overrides -- or one an '!flair$ instantiate' dispatcher
+    ! takes over -- occupies a single entry.
+
+    subroutine FLAIR_bind_method(tbl, n, cap, name, fn, flags)
+        type(PyMethodDef_t), intent(inout) :: tbl(*)
+        integer(c_int), intent(inout) :: n
+        integer(c_int),  value :: cap
+        type(c_ptr),     value :: name
+        type(c_funptr),  value :: fn
+        integer(c_int),  value :: flags
+        integer :: i
+        if (cap == 0) then
+            n = n + 1        ! counting pass: an upper bound on the row count
+            return
+        end if
+        do i = 1, int(n)
+            if (FLAIR_cstr_eq(tbl(i)%ml_name, name)) then
+                call FLAIR_set_method(tbl, i, name, fn, flags)
+                return
+            end if
+        end do
+        if (n >= cap) return  ! cannot happen: cap came from the counting pass
+        n = n + 1
+        call FLAIR_set_method(tbl, int(n), name, fn, flags)
+    end subroutine
+
+    subroutine FLAIR_bind_getset(tbl, n, cap, name, get, set)
+        type(PyGetSetDef_t), intent(inout) :: tbl(*)
+        integer(c_int), intent(inout) :: n
+        integer(c_int), value :: cap
+        type(c_ptr),    value :: name
+        type(c_funptr), value :: get, set
+        integer :: i
+        if (cap == 0) then
+            n = n + 1
+            return
+        end if
+        do i = 1, int(n)
+            if (FLAIR_cstr_eq(tbl(i)%name, name)) then
+                call FLAIR_set_getset(tbl, i, name, get, set)
+                return
+            end if
+        end do
+        if (n >= cap) return
+        n = n + 1
+        call FLAIR_set_getset(tbl, int(n), name, get, set)
     end subroutine
 
     subroutine FLAIR_set_slot(tbl, i, slot, pfunc)

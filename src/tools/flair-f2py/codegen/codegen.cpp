@@ -51,6 +51,45 @@ str_t module_pyqual(str_t const &m) {
   return package_prefix.empty() ? modpy : package_prefix + "." + modpy;
 }
 
+// ===========================================================================
+// Table binders
+//
+// A wrapped type's method and getset rows are installed by a `bind(C)`
+// subroutine instead of being written inline in PyInit. The binding label
+// makes it a plain external symbol, so another translation unit can call it
+// with nothing but an interface block -- no .mod of this wrapper, which is
+// what lets one file of a wrapped project be re-generated on its own.
+//
+// It is called twice: with cap == 0 it only counts rows, so PyInit can size
+// the table, then with the allocated table and its capacity it fills it.
+// ===========================================================================
+static str_t binder_body(str_t const &fn, str_t const &row_type,
+                         str_t const &rows) {
+  str_t s;
+  s += fmt::format(
+      "    subroutine {0}(tbl, n, cap) bind(C, name=\"{0}\")\n", fn);
+  s += fmt::format("        type({}), intent(inout) :: tbl(*)\n", row_type);
+  s += "        integer(c_int), intent(inout) :: n\n";
+  s += "        integer(c_int), value :: cap\n";
+  s += rows;
+  s += "    end subroutine\n\n";
+  return s;
+}
+
+// PyInit's count / allocate / fill / terminate sequence for one table.
+static str_t fill_table(str_t const &binder, str_t const &tbl,
+                        str_t const &probe, str_t const &end_fn) {
+  str_t s;
+  s += "        nb = 0\n";
+  s += fmt::format("        call {}({}, nb, 0_c_int)\n", binder, probe);
+  s += fmt::format("        allocate({}(nb + 1))\n", tbl);
+  s += "        nb = 0\n";
+  s += fmt::format("        call {}({}, nb, int(size({}), c_int))\n", binder,
+                   tbl, tbl);
+  s += fmt::format("        call {}({}, int(nb) + 1)\n", end_fn, tbl);
+  return s;
+}
+
 bool has_wrappable(module_info_t const &m) {
   return !m.derived_types.empty() || !m.functions.empty() ||
          !m.variables.empty();
@@ -77,6 +116,21 @@ str_t codegen_module(module_info_t const &m_in, bool internal_init) {
   // required, so no correct __init__ can be generated for it.
   for (auto it = m.derived_types.begin(); it != m.derived_types.end();) {
     dtype_info_t const &dt = it->second;
+    // The binder symbols carry the module name, so they are the longest
+    // identifiers the wrapper produces; check them before anything references
+    // them (63 characters is Fortran's limit).
+    if (dt.ptr != nullptr &&
+        binder_m_fn(m.name, tname(*dt.ptr)).size() > 63) {
+      flu::emit_error(*dt.ptr,
+                      "flair-f2py: derived type '" + it->first +
+                          "' in module '" + m.name +
+                          "' is too long for the generated table-binder names "
+                          "(63-char identifier limit); annotate the type '" +
+                          it->first + "' with a '!flair$ ignore' directive to "
+                                      "skip it");
+      it = m.derived_types.erase(it);
+      continue;
+    }
     std::vector<sema::Symbol const *> kwargs;
     if (dt.ptr != nullptr && dt.ctor.ptr != nullptr &&
         !ctor_kwargs(dt, m, ext_types, kwargs)) {
@@ -98,9 +152,12 @@ str_t codegen_module(module_info_t const &m_in, bool internal_init) {
 
   // Every wrapper instance has the same layout, so one dummy of the shared
   // runtime type supplies the basicsize for every type spec.
-  if (!m.derived_types.empty())
+  if (!m.derived_types.empty()) {
     pyinit_decls +=
         fmt::format("        type({}) :: dummy_obj\n", obj_struct);
+    // Row cursor shared by every table-binder call (reset before each).
+    pyinit_decls += "        integer(c_int) :: nb\n";
+  }
 
   // ---- derived types -------------------------------------------------------
   // Two passes over the types: the first generates the procedures and
@@ -123,11 +180,19 @@ str_t codegen_module(module_info_t const &m_in, bool internal_init) {
         continue;
       if (auto const *act = flu::binding_actual(*mth.ptr))
         bound.insert(act);
-      if (!mth.instantiate.empty())
+      if (!mth.instantiate.empty()) {
+        // An inherited '!flair$ instantiate' binding is left to the type that
+        // declares it: its dispatcher registers itself in every listed type's
+        // table, and the directive's base checks are stated against that
+        // declaring type. Generating a second dispatcher here would duplicate
+        // every specific and check the listed types against the wrong base.
+        if (mth.declared_in != dt.ptr &&
+            m.derived_types.count(mth.declared_in->name().ToString()) != 0)
+          continue;
         procedures +=
             gen_instantiated_method(dt, mth, m, strings, tables,
                                     ext_types, table_decls, pyinit_fills);
-      else
+      } else
         procedures +=
             gen_method(dt, *mth.ptr, m, strings, &tables[tn].method_fills,
                        tables[tn].nm, ext_types);
@@ -141,33 +206,40 @@ str_t codegen_module(module_info_t const &m_in, bool internal_init) {
         create_fills(tn, clsname(*dt.ptr), pyqual, strings);
   }
 
+  str_t binders;
   for (auto const &[name, dt] : m.derived_types) {
     if (dt.ptr == nullptr)
       continue;
     semantics::Symbol const &tsym = *dt.ptr;
     str_t const tn = tname(tsym);
     type_tables_t const &tt = tables[tn];
+    str_t const bm = binder_m_fn(m.name, tn), bg = binder_g_fn(m.name, tn);
 
-    str_t const method_fills =
-        tt.method_fills + method_sentinel(tn + "_methods", tt.nm + 1);
-    str_t const getset_fills =
-        tt.getset_fills + getset_sentinel(tn + "_getset", tt.ng + 1);
-
-    table_decls +=
-        fmt::format("    type(PyMethodDef_t), target, save :: {}_methods({})\n",
-                    tn, tt.nm + 1);
-    table_decls +=
-        fmt::format("    type(PyGetSetDef_t), target, save :: {}_getset({})\n",
-                    tn, tt.ng + 1);
+    // The rows are installed by an external binder rather than written here,
+    // so their count is not a compile-time property of this file: the tables
+    // are allocatable and sized by the binder's counting pass. `target` keeps
+    // slot_fills' c_loc valid, and they are never deallocated, which is what
+    // FLAIR_add_type relies on for the type's lifetime.
+    table_decls += fmt::format("    type(PyMethodDef_t), allocatable, target, "
+                               "save :: {}_methods(:)\n",
+                               tn);
+    table_decls += fmt::format("    type(PyGetSetDef_t), allocatable, target, "
+                               "save :: {}_getset(:)\n",
+                               tn);
     table_decls += fmt::format(
         "    type(PyType_Slot_t), target, save :: {}_slots(6)\n", tn);
     table_decls += fmt::format(
         "    type(c_ptr), save :: py_{}_type_obj = c_null_ptr\n", tn);
 
-    pyinit_fills +=
-        fmt::format("        ! --- {} method table ---\n", tn) + method_fills;
-    pyinit_fills +=
-        fmt::format("        ! --- {} getset table ---\n", tn) + getset_fills;
+    binders += binder_body(bm, "PyMethodDef_t", tt.method_fills);
+    binders += binder_body(bg, "PyGetSetDef_t", tt.getset_fills);
+
+    pyinit_fills += fmt::format("        ! --- {} method table ---\n", tn) +
+                    fill_table(bm, tn + "_methods", "FLAIR_probe_methods",
+                               "FLAIR_end_methods");
+    pyinit_fills += fmt::format("        ! --- {} getset table ---\n", tn) +
+                    fill_table(bg, tn + "_getset", "FLAIR_probe_getset",
+                               "FLAIR_end_getset");
     pyinit_fills += slot_fills(tn);
     pyinit_creates += tt.create;
   }
@@ -226,7 +298,7 @@ str_t codegen_module(module_info_t const &m_in, bool internal_init) {
   procedures += gen_module_vars(m, strings, &modfn_fills, nmod, ext_types,
                                 var_init_decls, var_creates);
 
-  modfn_fills += method_sentinel("module_methods", nmod + 1);
+  modfn_fills += method_sentinel("module_methods", std::to_string(nmod + 1));
 
   table_decls += fmt::format(
       "    type(PyMethodDef_t), target, save :: module_methods({})\n",
@@ -347,6 +419,7 @@ str_t codegen_module(module_info_t const &m_in, bool internal_init) {
                                 {"procedures", procedures},
                                 {"pyinit", pyinit},
                                 {"converters", converters},
+                                {"binders", binders},
                             });
 }
 

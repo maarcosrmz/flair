@@ -1,5 +1,7 @@
 #include "flu/symbols.hpp"
 
+#include <algorithm>
+
 #include <flang/Semantics/attr.h>
 #include <flang/Semantics/scope.h>
 #include <flang/Semantics/symbol.h>
@@ -56,6 +58,31 @@ sema::SymbolVector public_components(sema::Symbol const &type_sym) {
       continue; // skip parent comp / procs
     out.push_back(comp);
   }
+  return out;
+}
+
+std::vector<sema::Symbol const *> ancestors(sema::Symbol const &type_sym) {
+  std::vector<sema::Symbol const *> out;
+  for (sema::Symbol const *t = &type_sym;;) {
+    auto const *parent = t->GetParentTypeSpec();
+    if (parent == nullptr)
+      break;
+    t = &parent->typeSymbol();
+    out.push_back(t);
+  }
+  // Collected child-first; the callers want base-first so that inherited
+  // entries precede the ones that may override them.
+  std::reverse(out.begin(), out.end());
+  return out;
+}
+
+sema::SymbolVector all_public_components(sema::Symbol const &type_sym) {
+  sema::SymbolVector out;
+  for (sema::Symbol const *a : ancestors(type_sym))
+    for (auto const &c : public_components(*a))
+      out.push_back(c);
+  for (auto const &c : public_components(type_sym))
+    out.push_back(c);
   return out;
 }
 

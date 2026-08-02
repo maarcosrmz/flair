@@ -31,6 +31,17 @@ bool is_allocatable(sema::Symbol const &sym);
 // Public object-entity components of a derived type, in declaration order.
 sema::SymbolVector public_components(sema::Symbol const &type_sym);
 
+// Same, flattened over the whole `extends(...)` chain, most-distant ancestor
+// first. Fortran forbids redeclaring an inherited component name, so the
+// result needs no deduplication. Each level's parent component (the one named
+// after its base type) stays in the list: it is what a wrapper exposes as the
+// upcast view property.
+sema::SymbolVector all_public_components(sema::Symbol const &type_sym);
+
+// The `extends(...)` chain of `type_sym`, most-distant ancestor first,
+// excluding `type_sym` itself. Empty for a type that extends nothing.
+std::vector<sema::Symbol const *> ancestors(sema::Symbol const &type_sym);
+
 sema::SymbolVector get_specific_procs(const sema::Symbol &iface_sym);
 
 // Source name of the module that encloses `sym`'s definition ("" if none).

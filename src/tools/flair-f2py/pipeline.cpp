@@ -92,7 +92,7 @@ converter_producers(std::vector<module_info_t> const &modules) {
           scan_dummies(*mth.ptr, m, owners);
       // Same accept condition as public_fields, minus its warnings: only
       // inline scalar derived components become properties.
-      for (auto const &comp : flu::public_components(*dt.ptr))
+      for (auto const &comp : flu::all_public_components(*dt.ptr))
         if (flu::rank_of(comp) == 0 && !flu::is_pointer(comp) &&
             !flu::is_allocatable(comp))
           note_owner(comp->GetType(), m, owners);

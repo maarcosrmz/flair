@@ -56,7 +56,10 @@ static constexpr char tpl_noargs_method[] =
 sema::SymbolVector public_fields(dtype_info_t const &dt,
                                  module_info_t const &m) {
   sema::SymbolVector out;
-  for (auto const &sym : flu::public_components(*dt.ptr)) {
+  // Flattened over the `extends(...)` chain: an inherited component is a
+  // property of this type too. `p%<comp>` reaches it directly, so the getset
+  // templates need no adjustment.
+  for (auto const &sym : flu::all_public_components(*dt.ptr)) {
     auto const *t = sym->GetType();
     if (auto const c =
             t != nullptr ? classify_dtype(*t, m)
@@ -529,9 +532,9 @@ str_t gen_method(dtype_info_t const &dt, sema::Symbol const &binding,
 
   if (fills != nullptr) {
     ++n;
-    *fills += method_row(tn + "_methods", n, strings.intern(pyname), wrapper,
-                         args.empty() ? "METH_NOARGS"
-                                      : "METH_VARARGS + METH_KEYWORDS");
+    *fills += bind_method_row(strings.intern(pyname), wrapper,
+                              args.empty() ? "METH_NOARGS"
+                                           : "METH_VARARGS + METH_KEYWORDS");
   }
 
   // Unwrapping self cannot fail (tp_methods are only reached on an instance),
@@ -571,7 +574,7 @@ str_t gen_getset(dtype_info_t const &dt, sema::Symbol const &comp,
                        field);
 
   ++n;
-  fills += getset_row(tn + "_getset", n, strings.intern(field), getter, setter);
+  fills += bind_getset_row(strings.intern(field), getter, setter);
 
   if (c.cls == dtype_class::Local) {
     str_t const stn = tname(*c.sym);

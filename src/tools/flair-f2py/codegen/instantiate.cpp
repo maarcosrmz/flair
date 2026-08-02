@@ -216,14 +216,18 @@ str_t gen_dispatcher(str_t const &wrapper, str_t const &pyname, bool self_poly,
 
 // True if the wrapped type `tsym` declares (or overrides) a binding named
 // `pyname` itself, in which case that binding is wrapped normally and must
-// not be shadowed by a dispatcher row.
+// not be shadowed by a dispatcher row. A binding `tsym` merely inherits does
+// not count: traversal flattens those into `methods` too, but codegen leaves
+// the instantiate'd ones to this dispatcher precisely because a plain wrapper
+// could not marshal their polymorphic arguments.
 bool has_own_binding(module_info_t const &m, sema::Symbol const &tsym,
                      str_t const &pyname) {
   auto const it = m.derived_types.find(tsym.name().ToString());
   if (it == m.derived_types.end())
     return false;
   for (fnt_info_t const &mth : it->second.methods)
-    if (mth.ptr != nullptr && mth.ptr->name().ToString() == pyname)
+    if (mth.ptr != nullptr && mth.declared_in == &tsym &&
+        mth.ptr->name().ToString() == pyname)
       return true;
   return false;
 }
@@ -337,8 +341,9 @@ str_t gen_instantiated_method(dtype_info_t const &home, fnt_info_t const &mth,
       continue;
     str_t const tn = tname(*ti);
     type_tables_t &tt = tables[tn];
-    tt.method_fills += method_row(tn + "_methods", ++tt.nm,
-                                  strings.intern(pyname), dispatcher, flags);
+    ++tt.nm;
+    tt.method_fills +=
+        bind_method_row(strings.intern(pyname), dispatcher, flags);
   }
   return procedures;
 }

@@ -68,7 +68,7 @@ str_t codegen_package(str_t const &pkg, std::vector<str_t> const &submods) {
                     {"pkg", pkg},
                     {"cstrings", strings.decls()},
                     {"init_ifaces", init_ifaces},
-                    {"method_fills", method_sentinel("pkg_methods", 1)},
+                    {"method_fills", method_sentinel("pkg_methods", "1")},
                     {"moddef_fills", moddef_fills},
                     {"submodules", submodules},
                 });

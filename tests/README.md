@@ -78,12 +78,13 @@ location) to `flair-f2py`, since the tool does not locate flang's intrinsic
 | `test_cli` | command-line surface: `--help` / `--version`, `-v` off by default, rejected flag combinations |
 | `test_derived_types` | derived-type fields (incl. rank-1 allocatable as NumPy property), the three ctor styles (default new, generic interface, `<type>_init`), keyword-only `__init__`, view/deep-copy semantics, keep-alive |
 | `test_cross_module` | foreign derived-type fields and args across extension modules, use-associated converters, "not initialized" guard, cross-module generic dispatch, transitive converter-producer closure of the wrap set |
+| `test_inheritance` | `extends(...)` across files: inherited bindings and components flattened onto the extending type, overrides at every level, an inherited body observing the true dynamic type, private bindings staying unexposed, and re-generating either file on its own |
 | `test_compdb` | compilation-database mode: USE-closure discovery from `--entry`, per-entry compile flags, the combined package extension and its generated build script, `--wrap` composition (explicit files, the `@entry` token, files outside the closure, promoted converter producers) |
 | `test_interfaces` | generic-interface wrapping: dispatch on scalar category / derived type / array dtype+rank, kind-only overload collapse, single-specific forward, TypeError fallback |
 | `test_arrays` | NumPy array args: intent in/inout/out, rank 1/2, dtype mapping, writeback-if-copy |
 | `test_scalars` | numeric kinds, None returns, `METH_NOARGS` |
 | `test_visibility` | only public symbols are wrapped |
-| `test_directives` | `!flair$ ignore`, abort on unwrappable procedure with actionable hint; `!flair$ instantiate`: per-type wrappers + tp_name dispatch for `class(t)`/`class(*)` args of free functions and type-bound procedures (incl. inherited-binding registration on derived types), directive diagnostics |
+| `test_directives` | `!flair$ ignore`, abort on unwrappable procedure with actionable hint; `!flair$ instantiate`: per-type wrappers + tp_name dispatch for `class(t)`/`class(*)` args of free functions and type-bound procedures (a dispatcher on the declaring type also lands in the tables of the types that inherit it), directive diagnostics |
 | `test_field_warn` | unwrappable component warns + is skipped, type still wrapped |
 | `test_negative` | skipped-field warnings, unwrappable ctors, intrinsic-module args, character args all abort/warn as specified |
 

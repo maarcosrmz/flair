@@ -58,13 +58,23 @@ def test_instantiate_directive(builder):
     # class(*) dispatches the same way
     assert "function py_mod_type_code(self, args, kwds)" in src
 
-    # the TBP dispatcher is registered in the derived type's method table too
-    # (whoami is declared on shape_t only; Python classes do not inherit)
-    assert re.search(
-        r"FLAIR_set_method\(circle_t_methods, \d+, [^,]+, "
-        r"c_funloc\(py_shape_t_whoami\)",
-        src,
+    # whoami and meet are declared on shape_t only. circle_t inherits them, but
+    # their polymorphic dummies mean a plain per-type wrapper could not marshal
+    # them: the declaring type's dispatcher is what lands in circle_t's binder,
+    # exactly once each rather than alongside an inherited duplicate.
+    circle_binder = re.search(
+        r"subroutine flair_bindm_poly_mod_circle_t\b.*?end subroutine", src, re.S
     )
+    assert circle_binder
+    assert circle_binder.group(0).count("c_funloc(py_shape_t_whoami)") == 1
+    assert circle_binder.group(0).count("c_funloc(py_shape_t_meet)") == 1
+
+    # inherited components are properties of the extending type as well
+    circle_getset = re.search(
+        r"subroutine flair_bindg_poly_mod_circle_t\b.*?end subroutine", src, re.S
+    )
+    assert circle_getset
+    assert "c_funloc(py_circle_t_get_s)" in circle_getset.group(0)
 
     # two polymorphic args (self + other) -> cartesian product of specifics
     assert src.count("function py_shape_t_meet__") == 4
