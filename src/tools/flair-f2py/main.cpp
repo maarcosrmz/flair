@@ -1,4 +1,5 @@
 #include <cstdlib>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -9,6 +10,7 @@
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include "codegen/utils.hpp"
 #include "compdb_driver.hpp"
 #include "custom_action.hpp"
 #include "flu/logger.hpp"
@@ -38,6 +40,16 @@ static constexpr char usage[] = R"HELPDOC(
                                                   converters the consumer use-associates.
    --wrap @entry                                  Stands for the entry's own modules plus the
                                                   modules it USEs directly (--compdb only).
+   --external MODULE                              Treat MODULE as unwrappable (repeatable):
+                                                  it never joins the wrap set, and procedures,
+                                                  components and variables carrying its types
+                                                  are skipped with a warning instead of being
+                                                  wired to a converter that will never exist.
+                                                  --compdb additionally infers this for every
+                                                  module resolved from a precompiled .mod,
+                                                  since it parses each database entry from
+                                                  source; name third-party modules explicitly
+                                                  when their sources are in the database.
 
   Compilation-database mode:
    --compdb DIR                                   Discover the entry's USE closure from
@@ -69,7 +81,8 @@ static void print_version(llvm::raw_ostream &os) {
 // cl positional list would swallow those values as input files.
 struct options_t {
   std::vector<std::string> wrap_files; // --wrap FILE (repeatable), @entry token
-  std::string compdb_path;             // --compdb DIR
+  std::set<std::string> external_modules; // --external MODULE (repeatable)
+  std::string compdb_path;                // --compdb DIR
   std::string entry_file;              // --entry FILE
   std::string pkg_name;                // --pkg NAME
   llvm::SmallVector<const char *, 256> passthrough; // flang's own arguments
@@ -89,6 +102,9 @@ static options_t parse_options(int argc, const char **argv) {
     };
     if (arg == "--wrap")
       opts.wrap_files.emplace_back(option_value(arg));
+    // Folded here so the set matches however the module is spelled in source.
+    else if (arg == "--external")
+      opts.external_modules.insert(codegen::fold_lower(option_value(arg)));
     else if (arg == "--compdb")
       opts.compdb_path = option_value(arg);
     else if (arg == "--entry")
@@ -166,12 +182,14 @@ int main(int argc, const char **argv) try {
     report("Compilation-database mode: entry {}", opts.entry_file);
     return run_compdb_mode(opts.compdb_path, opts.entry_file,
                            std::move(opts.pkg_name), std::move(opts.wrap_files),
+                           std::move(opts.external_modules),
                            llvm::ArrayRef(opts.passthrough), argv[0]);
   }
 
   // ------- main tool
   return run_single_mode(llvm::ArrayRef(opts.passthrough),
-                         std::move(opts.wrap_files), argv[0]);
+                         std::move(opts.wrap_files),
+                         std::move(opts.external_modules), argv[0]);
 } catch (const std::exception &error) {
   flu::logger::error()(error.what());
   return EXIT_FAILURE;

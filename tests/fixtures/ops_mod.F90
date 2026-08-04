@@ -15,6 +15,15 @@ contains
     v%y = v%y + dy
   end subroutine translate
 
+  function biased(f, v, bias) result(r) ! optional cross-module arg, mid-list
+    real(wp), intent(in) :: f
+    type(vec2), intent(in), optional :: v
+    real(wp), intent(in) :: bias
+    real(wp) :: r
+    r = f + bias
+    if (present(v)) r = r + v%x
+  end function biased
+
   subroutine describe_vec(v)           ! overload variant on cross-module type
     type(vec2), intent(in) :: v
     print '(a,f0.3,a,f0.3,a)', 'vec2(', v%x, ', ', v%y, ')'

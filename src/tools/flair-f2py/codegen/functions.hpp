@@ -1,6 +1,7 @@
 #pragma once
 
 #include <map>
+#include <set>
 #include <vector>
 
 #include <flang/Semantics/symbol.h>
@@ -22,8 +23,8 @@ using ext_types_t = std::map<str_t, Fortran::semantics::Symbol const *>;
 
 // Classification of a declared type for wrapper codegen. `sym` is the defining
 // type symbol (never a use-association proxy); `owner` its defining module
-// (Foreign only).
-enum class dtype_class { NotDerived, Local, Foreign, Unsupported };
+// (Foreign and External only).
+enum class dtype_class { NotDerived, Local, Foreign, External, Unsupported };
 struct dtype_class_t {
   dtype_class cls;
   Fortran::semantics::Symbol const *sym = nullptr;
@@ -33,9 +34,20 @@ struct dtype_class_t {
 // Classify by symbol identity (robust against use-renames and case): Local if
 // the defining symbol is one of `m`'s wrapped types; Unsupported for PDTs,
 // intrinsic-module types (c_ptr & friends), and types defined in `m` but not
-// wrapped (their converters would never be generated); Foreign otherwise.
+// wrapped (their converters would never be generated); External if the
+// defining module is one no invocation can wrap (see note_external_modules);
+// Foreign otherwise.
 dtype_class_t classify_dtype(Fortran::semantics::DeclTypeSpec const &t,
                              module_info_t const &m);
+
+// Record the modules whose types can never be converted, so classify_dtype
+// reports them as External and every site that would reference a converter
+// skips the entity instead. `names` are folded module names (--external);
+// `auto_modfile` additionally treats any module read from a precompiled .mod
+// as external, which is sound only in compdb mode, where every database entry
+// is parsed from source. Must be called before the wrap set is closed over its
+// converter producers: an external module must not be promoted into it.
+void note_external_modules(std::set<str_t> names, bool auto_modfile);
 
 // Concrete wrapped types substituted for polymorphic (class) dummies of an
 // '!flair$ instantiate'd procedure: positional dummy index -> type symbol.

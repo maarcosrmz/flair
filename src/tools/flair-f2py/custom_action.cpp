@@ -94,7 +94,9 @@ void custom_action::executeAction() {
 }
 
 int run_single_mode(llvm::ArrayRef<const char *> args,
-                    std::vector<std::string> wrap_files, const char *argv0) {
+                    std::vector<std::string> wrap_files,
+                    std::set<std::string> external_modules,
+                    const char *argv0) {
   auto flang = std::make_unique<Fortran::frontend::CompilerInstance>();
 
   flang->createDiagnostics();
@@ -140,6 +142,7 @@ int run_single_mode(llvm::ArrayRef<const char *> args,
 
   auto action = std::make_unique<custom_action>();
   action->set_wrap_files(std::move(wrap_files));
+  action->set_external_modules(std::move(external_modules));
   bool const success = flang->executeAction(*action);
   flang->clearOutputFiles(/*EraseFiles=*/true);
 

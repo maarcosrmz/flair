@@ -94,6 +94,16 @@ struct wdata_t {
   // producer must be wrapped too. Only consulted while `wrap_files` narrows.
   std::set<str_t> wrap_modules;
 
+  // Folded names of modules named by --external: nothing can ever wrap them,
+  // so a type of theirs crossing a wrapped API skips the referencing entity
+  // instead of being wired to a converter that will never exist.
+  std::set<str_t> external_modules;
+
+  // In compdb mode every database entry is parsed from source, so a module
+  // that still arrives as a precompiled .mod is outside the project and is
+  // treated as external on top of the names above.
+  bool compdb_mode = false;
+
   // Engaged only in compdb mode: combined-package codegen.
   std::optional<pkg_info_t> pkg;
 

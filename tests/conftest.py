@@ -148,10 +148,13 @@ class CaseBuilder:
                 [self.flang, "-fPIC", "-I", self.runtime_dir, "-c", name]
             )
 
-    def flair(self, name: str, expect_error: bool = False) -> subprocess.CompletedProcess:
+    def flair(self, name: str, expect_error: bool = False,
+              external: list[str] | None = None) -> subprocess.CompletedProcess:
         cmd = [self.flair_bin]
         if self.intrinsic_mod_dir is not None:
             cmd += ["-fintrinsic-modules-path", self.intrinsic_mod_dir]
+        for e in external or []:
+            cmd += ["--external", e]
         proc = self._run([*cmd, name], check=False)
         self.flair_results[name] = proc
         if expect_error and proc.returncode == 0:
@@ -163,7 +166,8 @@ class CaseBuilder:
     def flair_compdb(self, compdb: str, entry: str,
                      wrap: list[str] | None = None,
                      pkg: str | None = None,
-                     expect_error: bool = False) -> subprocess.CompletedProcess:
+                     expect_error: bool = False,
+                     external: list[str] | None = None) -> subprocess.CompletedProcess:
         """flair-f2py in compilation-database mode: the USE closure of
         `entry` is discovered from compile_commands.json, each file parsed
         with its own recorded flags, and its modules wrapped into one
@@ -177,6 +181,8 @@ class CaseBuilder:
             cmd += ["-fintrinsic-modules-path", self.intrinsic_mod_dir]
         for w in wrap or []:
             cmd += ["--wrap", w]
+        for e in external or []:
+            cmd += ["--external", e]
         proc = self._run(cmd, check=False)
         self.flair_results[entry] = proc
         if expect_error and proc.returncode == 0:

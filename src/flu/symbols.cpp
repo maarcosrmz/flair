@@ -97,16 +97,22 @@ sema::SymbolVector get_specific_procs(const sema::Symbol &iface_sym) {
   return gtd->specificProcs();
 }
 
-std::string owning_module_name(sema::Symbol const &sym) {
+sema::Symbol const *owning_module(sema::Symbol const &sym) {
   for (semantics::Scope const *s = &sym.owner(); s != nullptr && !s->IsGlobal();
-       s = &s->parent()) {
-    if (s->IsModule()) {
-      if (auto const *msym = s->symbol())
-        return msym->name().ToString();
-      return "";
-    }
-  }
-  return "";
+       s = &s->parent())
+    if (s->IsModule())
+      return s->symbol();
+  return nullptr;
+}
+
+std::string owning_module_name(sema::Symbol const &sym) {
+  auto const *msym = owning_module(sym);
+  return msym != nullptr ? msym->name().ToString() : "";
+}
+
+bool from_module_file(sema::Symbol const &sym) {
+  auto const *msym = owning_module(sym);
+  return msym != nullptr && msym->test(sema::Symbol::Flag::ModFile);
 }
 
 bool in_intrinsic_module(sema::Symbol const &sym) {

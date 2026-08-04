@@ -73,6 +73,16 @@ sema::SymbolVector public_fields(dtype_info_t const &dt,
                               "' is not a wrapped type; property skipped");
         continue;
       }
+      if (c.cls == dtype_class::External) {
+        flu::emit_warning(*sym, "flair-f2py: cannot expose component '" +
+                                    sym->name().ToString() +
+                                    "': derived type '" +
+                                    flu::derived_name(*t) +
+                                    "' comes from external module '" + c.owner +
+                                    "', which cannot be wrapped; property "
+                                    "skipped");
+        continue;
+      }
       if (flu::rank_of(sym) != 0 || flu::is_pointer(sym) ||
           flu::is_allocatable(sym)) {
         flu::emit_warning(
@@ -566,10 +576,12 @@ str_t gen_getset(dtype_info_t const &dt, sema::Symbol const &comp,
       comp.GetType(); // non-null: public_fields only returns typed components
 
   // Derived components are guaranteed wrapped (Local/Foreign) and inline
-  // scalar: public_fields filters everything else. Classify before emitting
-  // the table row so a non-recordable foreign type skips the property cleanly.
+  // scalar: public_fields filters everything else, External included. Classify
+  // before emitting the table row so a non-recordable foreign type skips the
+  // property cleanly.
   auto const c = classify_dtype(*t, m);
-  if (c.cls == dtype_class::Foreign && !note_ext_type(ext_types, *c.sym))
+  if (c.cls == dtype_class::External ||
+      (c.cls == dtype_class::Foreign && !note_ext_type(ext_types, *c.sym)))
     return fmt::format("    ! TODO: unsupported component: {}%{}\n\n", tn,
                        field);
 

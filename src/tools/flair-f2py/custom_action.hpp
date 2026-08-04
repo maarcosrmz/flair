@@ -1,5 +1,6 @@
 #pragma once
 
+#include <set>
 #include <string>
 #include <vector>
 
@@ -32,6 +33,10 @@ public:
     wdata->wrap_files = std::move(files);
   }
 
+  void set_external_modules(std::set<std::string> modules) {
+    wdata->external_modules = std::move(modules);
+  }
+
   void executeAction() override;
 
   [[nodiscard]] bool failed() const { return failed_; }
@@ -45,6 +50,9 @@ private:
 // modules of the `wrap_files` set -- or every input module when it is empty.
 // Inputs must be given in dependency order, since USE statements resolve
 // against the modules earlier inputs contributed to the shared scope rather
-// than against .mod files. Returns a process exit code.
+// than against .mod files. `external_modules` (folded) names modules whose
+// types can never be converted, so entities referencing them are skipped.
+// Returns a process exit code.
 int run_single_mode(llvm::ArrayRef<const char *> args,
-                    std::vector<std::string> wrap_files, const char *argv0);
+                    std::vector<std::string> wrap_files,
+                    std::set<std::string> external_modules, const char *argv0);

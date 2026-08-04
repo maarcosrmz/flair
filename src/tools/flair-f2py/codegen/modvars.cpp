@@ -55,6 +55,9 @@ var_plan_t plan_var(semantics::Symbol const &v, module_info_t const &m,
                note_ext_type(ext_types, *c.sym)) {
       p.kind = var_kind::DerivedForeign;
       p.tsym = c.sym;
+    } else if (c.cls == dtype_class::External) {
+      return skip("its derived type comes from external module '" + c.owner +
+                  "', which cannot be wrapped");
     } else {
       return skip("its derived type is not wrapped");
     }

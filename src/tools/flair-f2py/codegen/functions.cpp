@@ -37,6 +37,27 @@ static constexpr char tpl_noargs_function[] =
     "{body}\n"
     "    end function\n";
 
+// Modules no invocation can ever wrap: the folded names given by --external,
+// plus (compdb mode) every module resolved from a precompiled .mod.
+static std::set<str_t> external_modules;
+static bool external_modfiles = false;
+
+void note_external_modules(std::set<str_t> names, bool auto_modfile) {
+  external_modules = std::move(names);
+  external_modfiles = auto_modfile;
+}
+
+// A type is external when its defining module is one flair cannot wrap. In
+// compdb mode the .mod origin decides it on its own: every database entry is
+// parsed from source, so a module that still arrives as a .mod has no source
+// in the project. Single mode has no such signal -- there a .mod-resolved
+// producer is exactly what a separate flair run wraps -- so it relies on
+// --external alone.
+static bool is_external(str_t const &owner, semantics::Symbol const &tsym) {
+  return external_modules.count(fold_lower(owner)) != 0 ||
+         (external_modfiles && flu::from_module_file(tsym));
+}
+
 dtype_class_t classify_dtype(semantics::DeclTypeSpec const &t,
                              module_info_t const &m) {
   auto const *ds = t.AsDerived();
@@ -56,6 +77,8 @@ dtype_class_t classify_dtype(semantics::DeclTypeSpec const &t,
   if (owner.empty() || owner[0] == '_' || flu::in_intrinsic_module(tsym) ||
       owner == m.name)
     return {dtype_class::Unsupported, &tsym, {}};
+  if (is_external(owner, tsym))
+    return {dtype_class::External, &tsym, owner};
   return {dtype_class::Foreign, &tsym, owner};
 }
 
@@ -129,27 +152,50 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
                 poly_overrides_t const *overrides) {
   str_t const ignore_hint = "; annotate '" + owner_name +
                             "' with a '!flair$ ignore' directive to skip it";
-  auto add_actual = [&](str_t const &actual) {
+  // Dropping a dummy from the middle of the list would re-associate every
+  // positional actual after it, so once one is gone the rest go by keyword.
+  bool dropped_before = false;
+  auto add_actual = [&](str_t const &dummy, str_t const &actual) {
     if (!call_args.empty())
       call_args += ", ";
-    call_args += actual;
+    call_args += dropped_before ? dummy + "=" + actual : actual;
   };
 
   // Every failure inside the fetch block leaves `r` at the caller's preset
   // failure value and jumps to the shared cleanup after the block.
   static constexpr char fail_return[] = "exit fetch";
 
+  // An OPTIONAL dummy of an external type is unreachable from Python either
+  // way -- no converter for it can exist -- so the wrapper omits it and calls
+  // the procedure without it, rather than losing the whole procedure. It is
+  // left out of the argument table too, so passing it by keyword is the
+  // TypeError it deserves instead of being silently ignored.
+  std::set<size_t> omitted;
+  for (size_t k = 0; k < dummies.size(); ++k) {
+    semantics::Symbol const *d = dummies[k];
+    if (d == nullptr || !d->attrs().test(semantics::Attr::OPTIONAL))
+      continue;
+    if (overrides != nullptr && overrides->count(k) != 0)
+      continue;
+    auto const *t = d->GetType();
+    if (t != nullptr && classify_dtype(*t, m).cls == dtype_class::External)
+      omitted.insert(k);
+  }
+
   // The runtime binds positional and keyword arguments in one call; the
   // wrapper carries only the dummy names and which of them are required.
-  int const nargs = static_cast<int>(dummies.size());
+  int const nargs = static_cast<int>(dummies.size() - omitted.size());
   if (nargs > 0) {
     decls += fmt::format("        type(c_ptr) :: objs({})\n", nargs);
     decls += fmt::format("        type(c_ptr) :: argnames({})\n", nargs);
     decls += fmt::format("        logical :: argreq({})\n", nargs);
     std::vector<str_t> names, reqs;
-    for (semantics::Symbol *d : dummies) {
+    for (size_t k = 0; k < dummies.size(); ++k) {
+      semantics::Symbol const *d = dummies[k];
       if (d == nullptr)
         return false;
+      if (omitted.count(k) != 0)
+        continue;
       names.push_back(
           fmt::format("c_loc({})", strings.intern(d->name().ToString())));
       reqs.push_back(d->attrs().test(semantics::Attr::OPTIONAL) ? ".false."
@@ -162,10 +208,21 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
     fetch += str_t(fail_return) + "\n";
   }
 
-  int i = 0; // unique local suffix == positional index
+  int i = 0;    // unique local suffix == positional index
+  int slot = 0; // index into the argument table, which omits dropped dummies
   for (semantics::Symbol *d : dummies) {
     if (d == nullptr)
       return false;
+    if (omitted.count(size_t(i)) != 0) {
+      flu::emit_warning(*d, "flair-f2py: optional argument '" +
+                                d->name().ToString() + "' of '" + owner_name +
+                                "' is omitted: its derived type comes from "
+                                "external module '" +
+                                classify_dtype(*d->GetType(), m).owner + "'");
+      dropped_before = true;
+      ++i;
+      continue;
+    }
     auto const *t = d->GetType();
     if (t == nullptr)
       return false;
@@ -181,7 +238,7 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
     str_t const nm = d->name().ToString();
     // FLAIR_parse_args has already bound the argument and reported a missing
     // required one; an absent optional (or one given as None) is c_null_ptr.
-    str_t const obj = fmt::format("objs({})", i + 1);
+    str_t const obj = fmt::format("objs({})", ++slot);
     str_t const pres = fmt::format("c_associated({})", obj);
 
     // An instantiate override replaces the declared (polymorphic) type with a
@@ -227,6 +284,16 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
                               from_pyobject_fn(n), obj);
         bfetch += fmt::format("        if (.not. associated({})) {}\n", val,
                               fail_return);
+      } else if (c.cls == dtype_class::External) {
+        // No wrapper for the defining module can exist, so there is nothing
+        // for the user to annotate away and nothing to wait for: drop the
+        // procedure with a warning rather than failing the whole run.
+        flu::emit_warning(*d, "flair-f2py: '" + owner_name +
+                                  "' is skipped: argument '" +
+                                  d->name().ToString() + "' has derived type '" +
+                                  flu::derived_name(*t) +
+                                  "' from external module '" + c.owner + "'");
+        return false;
       } else {
         flu::emit_error(*d, "flair-f2py: cannot wrap argument '" +
                                 d->name().ToString() + "': derived type '" +
@@ -243,7 +310,7 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
       } else {
         fetch += bfetch;
       }
-      add_actual(val);
+      add_actual(nm, val);
     } else if (flu::rank_of(*d) == 0 && intrinsic_supported(*t)) {
       // A primitive scalar is passed by value; an out/inout write cannot be
       // reflected back into the (immutable) Python object, so reject it.
@@ -280,9 +347,9 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
           str_t const fix = fmt::format("xf{}", i);
           decls += fmt::format("        character({}) :: {}\n", *cl, fix);
           fetch += fmt::format("        {} = {}\n", fix, val);
-          add_actual(fix);
+          add_actual(nm, fix);
         } else {
-          add_actual(narrow(*t, val));
+          add_actual(nm, narrow(*t, val));
         }
       } else {
         // An optional value goes through a pointer of the dummy's exact type:
@@ -312,7 +379,7 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
         if (cleanup != nullptr)
           *cleanup += fmt::format(
               "        if (associated({0})) deallocate({0})\n", optv);
-        add_actual(optv);
+        add_actual(nm, optv);
       }
     } else if (int const rr = flu::rank_of(*d); rr > 0 && array_supported(*t)) {
       // Intrinsic array: coerce to an F-contiguous numpy array of the exact
@@ -355,7 +422,7 @@ bool parse_args(std::vector<semantics::Symbol *> const &dummies,
       }
       if (cleanup != nullptr)
         *cleanup += fmt::format("        call FLAIR_array_release({})\n", arr);
-      add_actual(val);
+      add_actual(nm, val);
     } else {
       flu::emit_error(*d, "flair-f2py: cannot wrap argument '" +
                               d->name().ToString() +

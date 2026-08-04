@@ -201,3 +201,79 @@ def test_compdb_wrap_converter_closure(builder):
     b.compile("vec_mod.F90", "ops_mod.F90")
     b.run_build_script("proj", ["vec_mod.o", "ops_mod.o"])
     b.run_check("check_pkg_crossmod.py")
+
+
+def test_compdb_external_module_auto_detected(builder):
+    """A producer with no entry in the database can never be wrapped by any
+    invocation: compdb mode parses every entry from source, so vec_mod
+    arriving as a precompiled .mod marks it external. The procedures carrying
+    its type are skipped with a warning instead of being wired to a converter
+    module that will never exist."""
+    b = builder
+    b.add_sources("vec_mod.F90", "ops_mod.F90")
+    b.compile("vec_mod.F90")  # vec_mod.mod, but no database entry
+    write_compdb(b, [
+        {"command": "gfortran -c -o ops_mod.o ops_mod.F90",
+         "file": "ops_mod.F90"},
+    ])
+
+    proc = b.flair_compdb("compile_commands.json", "ops_mod.F90", pkg="proj")
+
+    # the impossible advice is gone, replaced by a skip the user can act on
+    assert "must be generated separately" not in proc.stderr
+    assert "external module 'vec_mod'" in proc.stderr
+    assert "'translate' is skipped" in proc.stderr
+    assert "'describe_vec' is skipped" in proc.stderr
+
+    ops = b.generated("ops")
+    assert "py_vec_mod" not in ops
+    assert "vec2_from_PyObject" not in ops
+    assert b.generated_missing("vec")
+
+    # an OPTIONAL external dummy costs only the argument, not the procedure:
+    # it leaves the argument table, and the actuals after the hole switch to
+    # keyword form so they still reach the dummies they belong to
+    assert "optional argument 'v' of 'biased' is omitted" in proc.stderr
+    body = ops[ops.index("function py_mod_biased"):]
+    body = body[:body.index("end function")]
+    assert "objs(2)" in body and "argreq = [.true., .true.]" in body, body
+    assert re.search(r"biased\(real\(x0, 8\), bias=real\(x2, 8\)\)", body), body
+
+    # what remains still builds and imports
+    b.compile("ops_mod.F90")
+    b.run_build_script("proj", ["vec_mod.o", "ops_mod.o"])
+    b.run_check("check_pkg_external.py")
+
+
+def test_compdb_external_flag_overrides_in_database_producer(builder):
+    """FetchContent shape: the producer's source *is* in the database, so
+    auto-detect stays silent and vec_mod is wrapped by default. --external
+    excludes it, which must suppress the converter-producer promotion too --
+    not merely the converter reference -- or the wrap set would pull it back
+    in on the first pass."""
+    b = builder
+    b.add_sources("vec_mod.F90", "ops_mod.F90")
+    entries = [
+        {"command": "gfortran -c -o vec_mod.o vec_mod.F90",
+         "file": "vec_mod.F90"},
+        {"command": "gfortran -c -o ops_mod.o ops_mod.F90",
+         "file": "ops_mod.F90"},
+    ]
+    write_compdb(b, entries)
+
+    # default: source in the database means wrappable, and the closure
+    # promotes it even though the wrap set names only the consumer
+    b.flair_compdb("compile_commands.json", "ops_mod.F90", pkg="proj",
+                   wrap=["ops_mod.F90"])
+    assert not b.generated_missing("vec")
+    assert "vec2_from_PyObject" in b.generated("ops")
+
+    b.clear_generated()
+    proc = b.flair_compdb("compile_commands.json", "ops_mod.F90", pkg="proj",
+                          wrap=["ops_mod.F90"], external=["vec_mod"])
+
+    assert b.generated_missing("vec"), "--external producer was still promoted"
+    assert "external module 'vec_mod'" in proc.stderr
+    ops = b.generated("ops")
+    assert "py_vec_mod" not in ops
+    assert "vec2_from_PyObject" not in ops

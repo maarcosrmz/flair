@@ -199,6 +199,11 @@ package_outputs(wdata_t &wdata, llvm::raw_ostream &out,
 
 bool run_wrap_pipeline(sema::SemanticsContext &context,
                        std::shared_ptr<wdata_t> wdata, llvm::raw_ostream &out) {
+  // Before the first traversal: classify_dtype drives the closure below, so an
+  // external module has to be known by then or it would be promoted into the
+  // wrap set on the first pass and wrapped despite being external.
+  note_external_modules(wdata->external_modules, wdata->compdb_mode);
+
   traverse_global_scope(context.globalScope(), wdata, context);
 
   // Close the wrap set over its converter producers. Promoting one module can
@@ -206,6 +211,8 @@ bool run_wrap_pipeline(sema::SemanticsContext &context,
   // `wrap_modules` only grows and is bounded by the modules in scope, and a
   // producer that is not in scope at all (wrappable only by a separate run)
   // simply never shows up, leaving note_ext_type's warning to say so.
+  // External producers never reach here: classify_dtype rejects them, so
+  // converter_producers does not report them.
   while (not wdata->wrap_files.empty()) {
     std::set<std::string> wrapped;
     for (auto const &mi : wdata->modules)

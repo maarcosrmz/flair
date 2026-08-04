@@ -1,5 +1,6 @@
 #pragma once
 
+#include <set>
 #include <string>
 #include <vector>
 
@@ -17,9 +18,13 @@ inline constexpr char WRAP_ENTRY_TOKEN[] = "@entry";
 // combined package extension named `pkg_name` (default: derived from the
 // entry's file stem). `passthrough_args` are the remaining command-line
 // flags; they are applied on top of the entry's recorded flags and win on
-// conflicts. Returns a process exit code.
+// conflicts. `external_modules` (folded) names modules whose types can never
+// be converted; this mode also treats every module resolved from a
+// precompiled .mod as external, since each database entry is parsed from
+// source. Returns a process exit code.
 int run_compdb_mode(std::string const &compdb_path,
                     std::string const &entry_file, std::string pkg_name,
                     std::vector<std::string> wrap_files,
+                    std::set<std::string> external_modules,
                     llvm::ArrayRef<const char *> passthrough_args,
                     const char *argv0);

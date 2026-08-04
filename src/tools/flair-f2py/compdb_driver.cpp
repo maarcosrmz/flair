@@ -89,6 +89,7 @@ static std::string locate_runtime_src(const char *argv0) {
 int run_compdb_mode(std::string const &compdb_path,
                     std::string const &entry_file, std::string pkg_name,
                     std::vector<std::string> wrap_files,
+                    std::set<std::string> external_modules,
                     llvm::ArrayRef<const char *> passthrough_args,
                     const char *argv0) {
   auto const entries = compdb::load(compdb_path);
@@ -194,6 +195,8 @@ int run_compdb_mode(std::string const &compdb_path,
     }
   }
   wdata->pkg = std::move(pkg);
+  wdata->external_modules = std::move(external_modules);
+  wdata->compdb_mode = true;
 
   for (auto &pf : files) {
     parse::Program &tree =

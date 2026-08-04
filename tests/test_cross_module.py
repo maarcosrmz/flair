@@ -101,3 +101,41 @@ def test_crossmod_wrap_closure_is_transitive(builder):
     assert "use py_geom_mod, only: point_t_from_PyObject" in \
         builder.generated("scene")
     assert "generated separately, compiled before this one" not in proc.stderr
+
+
+def test_external_flag_skips_producer(builder):
+    """Single mode cannot tell an external library from a producer wrapped by
+    a separate run -- both resolve from a .mod -- so --external is how the
+    caller says which. Named modules are excluded from the wrap set and their
+    types skip the entities that carry them."""
+    b = builder
+    b.add_sources("vec_mod.F90", "ops_mod.F90")
+    b.compile("vec_mod.F90")
+
+    proc = b.flair("ops_mod.F90", external=["vec_mod"])
+
+    assert "must be generated separately" not in proc.stderr
+    assert "external module 'vec_mod'" in proc.stderr
+    assert "'translate' is skipped" in proc.stderr
+
+    ops = b.generated("ops")
+    assert "py_vec_mod" not in ops
+    assert "vec2_from_PyObject" not in ops
+    # the untouched parts of the module are unaffected
+    assert "py_mod_describe_int" in ops
+    assert "py_mod_tagof_str" in ops
+
+
+def test_modfile_producer_is_not_external_in_single_mode(builder):
+    """The auto-detect must stay scoped to compdb mode: in single mode a
+    producer resolved from a .mod is the normal cross-module workflow, so it
+    keeps its converters and the separate-generation warning."""
+    b = builder
+    b.add_sources("vec_mod.F90", "ops_mod.F90")
+    b.compile("vec_mod.F90")
+
+    proc = b.flair("ops_mod.F90")
+
+    assert "generated separately, compiled before this one" in proc.stderr
+    assert "external module" not in proc.stderr
+    assert "use py_vec_mod, only: vec2_from_PyObject" in b.generated("ops")
